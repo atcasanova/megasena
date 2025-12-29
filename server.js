@@ -179,6 +179,50 @@ function renderLayout(title, body) {
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
       rel="stylesheet"
     />
+    <style>
+      body {
+        background: radial-gradient(circle at top, #eef2ff 0%, #f8fafc 45%, #ffffff 100%);
+      }
+      .navbar {
+        background: linear-gradient(120deg, #2563eb 0%, #1d4ed8 55%, #1e40af 100%);
+        box-shadow: 0 10px 24px rgba(30, 64, 175, 0.2);
+      }
+      .card {
+        border: 0;
+        border-radius: 18px;
+        box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08);
+      }
+      .card-header,
+      .card-body {
+        border-radius: 18px;
+      }
+      .link-box {
+        background: #f1f5f9;
+        border-radius: 12px;
+        padding: 10px 12px;
+        color: #0f172a;
+        word-break: break-all;
+      }
+      .share-panel {
+        background: #ffffff;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 16px;
+        padding: 14px 16px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+      }
+      @media (min-width: 992px) {
+        .w-lg-auto {
+          width: auto !important;
+        }
+      }
+      .page-title {
+        font-weight: 700;
+        color: #0f172a;
+      }
+      .muted-lead {
+        color: #64748b;
+      }
+    </style>
   </head>
   <body class="bg-light">
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
@@ -508,14 +552,14 @@ app.get("/", (req, res) => {
       <div class="col-lg-8">
         <div class="card shadow-sm">
           <div class="card-body">
-            <h1 class="h4">Criar novo bolão</h1>
-            <p class="text-muted">Informe o número do concurso e cadastre seus jogos.</p>
+            <h1 class="h4 page-title">Criar novo bolão</h1>
+            <p class="muted-lead">Informe o número do concurso e cadastre seus jogos.</p>
             <form method="post" action="/bolao">
               <div class="mb-3">
                 <label class="form-label">Número do concurso</label>
                 <input class="form-control" name="drawNumber" type="number" min="1" max="9999" step="1" inputmode="numeric" required />
               </div>
-              <button class="btn btn-primary">Criar bolão</button>
+              <button class="btn btn-primary w-100">Criar bolão</button>
             </form>
           </div>
         </div>
@@ -694,17 +738,17 @@ app.get("/b/:id", async (req, res) => {
           `;
 
           const body = `
-            <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-4">
               <div>
-                <h1 class="h4">Bolão ${escapeHtml(id)}</h1>
+                <h1 class="h4 page-title">Bolão ${escapeHtml(id)}</h1>
                 ${resultBadge}
               </div>
-              <div>
-                <small class="text-muted">Link para compartilhar</small><br />
-                <code>${escapeHtml(shareLink)}</code>
+              <div class="share-panel w-100 w-lg-auto">
+                <small class="text-muted">Link para compartilhar</small>
+                <code class="link-box d-block mt-2">${escapeHtml(shareLink)}</code>
                 ${
                   authorized
-                    ? `<div class="mt-2"><small class="text-muted">Link do administrador</small><br /><code>${escapeHtml(
+                    ? `<div class="mt-3"><small class="text-muted">Link do administrador</small><code class="link-box d-block mt-2">${escapeHtml(
                         adminLink
                       )}</code></div>`
                     : ""
@@ -897,7 +941,7 @@ app.get("/admin", requireAdmin, (req, res) => {
                   <small class="text-muted">Concurso ${escapeHtml(
                     bolao.draw_number
                   )}</small><br />
-                  <small class="text-muted">Link: ${escapeHtml(
+                  <small class="text-muted text-break d-block">Link: ${escapeHtml(
                     shareLink
                   )}</small>
                 </div>
@@ -1024,9 +1068,9 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
                   <div class="card-body">
                     <h2 class="h6">Links</h2>
                     <p class="small text-muted mb-2">Compartilhamento:</p>
-                    <code class="small">${escapeHtml(shareLink)}</code>
+                    <code class="small link-box d-block">${escapeHtml(shareLink)}</code>
                     <p class="small text-muted mt-3 mb-2">Administrador:</p>
-                    <code class="small">${escapeHtml(adminLink)}</code>
+                    <code class="small link-box d-block">${escapeHtml(adminLink)}</code>
                   </div>
                 </div>
               </div>
