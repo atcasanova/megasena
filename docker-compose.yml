@@ -10,6 +10,8 @@ services:
       - DB_PATH=/app/data/megasena.db
       - SMTP_HOST=host.docker.internal
       - SMTP_PORT=25
+      - SMTP_TLS_REJECT_UNAUTHORIZED=false
+      # - SMTP_IGNORE_TLS=true
       - FROM_DOMAIN=bru.to
     volumes:
       - megasena-data:/app/data
