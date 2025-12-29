@@ -17,11 +17,33 @@ const ADMIN_PASS = process.env.ADMIN_PASS || "atcasanova123atcasanova";
 const SMTP_HOST = process.env.SMTP_HOST || "127.0.0.1";
 const SMTP_PORT = Number(process.env.SMTP_PORT || 25);
 const FROM_DOMAIN = process.env.FROM_DOMAIN || "bru.to";
+const SMTP_SECURE =
+  SMTP_PORT === 25 ? false : process.env.SMTP_SECURE === "true";
+const SMTP_IGNORE_TLS = process.env.SMTP_IGNORE_TLS === "true";
+const SMTP_REQUIRE_TLS = process.env.SMTP_REQUIRE_TLS === "true";
+const SMTP_TLS_REJECT_UNAUTHORIZED =
+  process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== "false";
 
-const mailTransport = nodemailer.createTransport({
+const mailTransportOptions = {
   host: SMTP_HOST,
   port: SMTP_PORT,
-  secure: false,
+  secure: SMTP_SECURE,
+  ...(SMTP_IGNORE_TLS ? { ignoreTLS: true } : {}),
+  ...(SMTP_REQUIRE_TLS ? { requireTLS: true } : {}),
+  ...(!SMTP_TLS_REJECT_UNAUTHORIZED
+    ? { tls: { rejectUnauthorized: false } }
+    : {}),
+};
+
+const mailTransport = nodemailer.createTransport(mailTransportOptions);
+
+console.log("SMTP config:", {
+  host: SMTP_HOST,
+  port: SMTP_PORT,
+  secure: SMTP_SECURE,
+  ignoreTLS: SMTP_IGNORE_TLS,
+  requireTLS: SMTP_REQUIRE_TLS,
+  rejectUnauthorized: SMTP_TLS_REJECT_UNAUTHORIZED,
 });
 
 const app = express();
@@ -978,6 +1000,28 @@ app.get("/admin", requireAdmin, (req, res) => {
       res.send(renderLayout("Admin", body));
     }
   );
+});
+
+app.post("/admin/email/test", requireAdmin, async (req, res) => {
+  const to = String(req.body.to || req.query.to || "").trim().toLowerCase();
+  if (!isValidEmail(to)) {
+    return res.status(400).json({ ok: false, error: "Email inválido." });
+  }
+  try {
+    await mailTransport.sendMail({
+      from: `"Bolão Mega-Sena" <no-reply@${FROM_DOMAIN}>`,
+      to,
+      subject: "Teste de email - Bolão Mega-Sena",
+      text: "Este é um email de teste enviado pelo sistema.",
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Falha ao enviar email de teste:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Falha ao enviar email de teste.",
+    });
+  }
 });
 
 app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
