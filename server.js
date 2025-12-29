@@ -74,6 +74,7 @@ function initDb() {
     db.run(
       `CREATE TABLE IF NOT EXISTS boloes (
         id TEXT PRIMARY KEY,
+        name TEXT,
         draw_number INTEGER NOT NULL,
         edit_token TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -149,6 +150,17 @@ function backfillEditTokens() {
   );
 }
 
+function parseBolaoName(input) {
+  const name = String(input || "").trim();
+  if (!name) {
+    return { name: "" };
+  }
+  if (name.length > 80) {
+    return { error: "O nome do bolão deve ter até 80 caracteres." };
+  }
+  return { name };
+}
+
 function parseCookies(req) {
   const header = req.headers.cookie || "";
   return header.split(";").reduce((acc, part) => {
@@ -190,13 +202,22 @@ function requireAdmin(req, res, next) {
   res.status(401).send(renderLayout("Admin", "Autenticação necessária."));
 }
 
-function renderLayout(title, body) {
+function getBolaoDisplayName(bolao) {
+  const name = String(bolao.name || "").trim();
+  if (name) {
+    return `Bolão ${name}`;
+  }
+  return `Bolão ${bolao.id}`;
+}
+
+function renderLayout(title, body, extraHead = "") {
   return `<!doctype html>
 <html lang="pt-BR">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>${escapeHtml(title)}</title>
+    ${extraHead}
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
       rel="stylesheet"
@@ -329,6 +350,8 @@ function dbRun(sql, params = []) {
 }
 
 function buildResultsEmailHtml({ bolao, draw, games }) {
+  const bolaoTitle = getBolaoDisplayName(bolao);
+  const bolaoSubtitle = bolaoTitle === `Bolão ${bolao.id}` ? "" : bolao.id;
   const drawNumbers = new Set(draw.numbers);
   const gamesHtml = games.length
     ? games
@@ -396,9 +419,16 @@ function buildResultsEmailHtml({ bolao, draw, games }) {
             Apuração em ${escapeHtml(draw.drawDate)}
           </div>
         </div>
-        <h2 style="font-size:16px;color:#111827;margin-bottom:8px;">Bolão ${
-          bolao.id
-        }</h2>
+        <h2 style="font-size:16px;color:#111827;margin-bottom:8px;">${escapeHtml(
+          bolaoTitle
+        )}</h2>
+        ${
+          bolaoSubtitle
+            ? `<div style="font-size:12px;color:#6b7280;margin-bottom:8px;">ID ${escapeHtml(
+                bolaoSubtitle
+              )}</div>`
+            : ""
+        }
         <table style="width:100%;border-collapse:collapse;">
           <tbody>
             ${gamesHtml}
@@ -413,6 +443,8 @@ function buildResultsEmailHtml({ bolao, draw, games }) {
 }
 
 function buildResultsEmailText({ bolao, draw, games }) {
+  const bolaoTitle = getBolaoDisplayName(bolao);
+  const bolaoSubtitle = bolaoTitle === `Bolão ${bolao.id}` ? "" : bolao.id;
   const drawNumbers = draw.numbers.join(" ");
   const gamesText = games.length
     ? games
@@ -423,24 +455,33 @@ function buildResultsEmailText({ bolao, draw, games }) {
         })
         .join("\n")
     : "- Nenhum jogo cadastrado.";
-  return `Resultados do seu bolão ${bolao.id}\nConcurso ${
-    draw.number
-  } (${draw.drawDate})\nDezenas: ${drawNumbers}\n\nJogos:\n${gamesText}`;
+  return `Resultados do seu bolão ${bolaoTitle}${
+    bolaoSubtitle ? ` (ID ${bolaoSubtitle})` : ""
+  }\nConcurso ${draw.number} (${draw.drawDate})\nDezenas: ${drawNumbers}\n\nJogos:\n${gamesText}`;
 }
 
-function buildSubscriptionEmail({ bolaoId, token }) {
+function buildSubscriptionEmail({ bolao, token }) {
   const confirmationLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
-    bolaoId
+    bolao.id
   )}/confirm?token=${encodeURIComponent(token)}`;
+  const bolaoTitle = getBolaoDisplayName(bolao);
+  const bolaoSubtitle = bolaoTitle === `Bolão ${bolao.id}` ? "" : bolao.id;
   const html = `
     <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;">
       <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:16px;padding:24px;border:1px solid #e5e7eb;">
         <h1 style="margin-top:0;font-size:20px;color:#111827;">Confirme seu email</h1>
         <p style="color:#4b5563;font-size:14px;">
-          Clique no botão abaixo para confirmar que você quer acompanhar o bolão ${escapeHtml(
-            bolaoId
+          Clique no botão abaixo para confirmar que você quer acompanhar o ${escapeHtml(
+            bolaoTitle
           )}.
         </p>
+        ${
+          bolaoSubtitle
+            ? `<p style="color:#6b7280;font-size:12px;margin-top:-6px;">ID ${escapeHtml(
+                bolaoSubtitle
+              )}</p>`
+            : ""
+        }
         <p>
           <a href="${confirmationLink}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-size:14px;">Confirmar assinatura</a>
         </p>
@@ -450,7 +491,9 @@ function buildSubscriptionEmail({ bolaoId, token }) {
       </div>
     </div>
   `;
-  const text = `Confirme seu email para acompanhar o bolão ${bolaoId}: ${confirmationLink}`;
+  const text = `Confirme seu email para acompanhar o ${bolaoTitle}${
+    bolaoSubtitle ? ` (ID ${bolaoSubtitle})` : ""
+  }: ${confirmationLink}`;
   return { html, text };
 }
 
@@ -519,7 +562,7 @@ function getDraw(number) {
 async function notifySubscribersForDraw(draw) {
   try {
     const boloes = await dbAll(
-      "SELECT id, draw_number FROM boloes WHERE draw_number = ?",
+      "SELECT id, name, draw_number FROM boloes WHERE draw_number = ?",
       [draw.number]
     );
     if (!boloes.length) return;
@@ -578,6 +621,11 @@ app.get("/", (req, res) => {
             <p class="muted-lead">Informe o número do concurso e cadastre seus jogos.</p>
             <form method="post" action="/bolao">
               <div class="mb-3">
+                <label class="form-label">Nome do bolão</label>
+                <input class="form-control" name="name" maxlength="80" placeholder="Ex: Família Silva" />
+                <div class="form-text">Opcional. Ajuda a identificar o bolão nos emails.</div>
+              </div>
+              <div class="mb-3">
                 <label class="form-label">Número do concurso</label>
                 <input class="form-control" name="drawNumber" type="number" min="1" max="9999" step="1" inputmode="numeric" required />
               </div>
@@ -611,12 +659,18 @@ app.post("/bolao", (req, res) => {
       .status(400)
       .send(renderLayout("Erro", escapeHtml(error)));
   }
+  const { name, error: nameError } = parseBolaoName(req.body.name);
+  if (nameError) {
+    return res
+      .status(400)
+      .send(renderLayout("Erro", escapeHtml(nameError)));
+  }
   const id = generateBolaoId();
   const editToken = crypto.randomBytes(16).toString("hex");
   const createdAt = new Date().toISOString();
   db.run(
-    "INSERT INTO boloes (id, draw_number, edit_token, created_at) VALUES (?, ?, ?, ?)",
-    [id, drawNumber, editToken, createdAt],
+    "INSERT INTO boloes (id, name, draw_number, edit_token, created_at) VALUES (?, ?, ?, ?, ?)",
+    [id, name, drawNumber, editToken, createdAt],
     (err) => {
       if (err) {
         return res
@@ -636,7 +690,7 @@ app.get("/b/:id", async (req, res) => {
       .send(renderLayout("Bolão", "Bolão não encontrado."));
   }
   db.get(
-    "SELECT id, draw_number, edit_token FROM boloes WHERE id = ?",
+    "SELECT id, name, draw_number, edit_token FROM boloes WHERE id = ?",
     [id],
     async (err, bolao) => {
       if (err || !bolao) {
@@ -706,10 +760,25 @@ app.get("/b/:id", async (req, res) => {
                 .join("")
             : `<li class="list-group-item text-muted">Nenhum jogo cadastrado ainda.</li>`;
 
+          const bolaoTitle = getBolaoDisplayName(bolao);
+          const bolaoSubtitle =
+            bolaoTitle === `Bolão ${bolao.id}` ? "" : bolao.id;
           const adminLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
             id
           )}?token=${encodeURIComponent(bolao.edit_token)}`;
           const shareLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(id)}`;
+          const ogTitle = bolaoTitle;
+          const ogDescription = draw
+            ? `${bolaoTitle} • Concurso ${draw.number} (${draw.drawDate})`
+            : `${bolaoTitle} • Concurso ${bolao.draw_number}`;
+          const ogTags = `
+            <meta property="og:type" content="website" />
+            <meta property="og:title" content="${escapeHtml(ogTitle)}" />
+            <meta property="og:description" content="${escapeHtml(
+              ogDescription
+            )}" />
+            <meta property="og:url" content="${escapeHtml(shareLink)}" />
+          `;
           const addGameCard = authorized
             ? `
                 <div class="card shadow-sm mb-4">
@@ -727,13 +796,32 @@ app.get("/b/:id", async (req, res) => {
                 </div>
               `
             : `
-                <div class="card border-0 bg-white shadow-sm mb-4">
+              <div class="card border-0 bg-white shadow-sm mb-4">
                   <div class="card-body">
                     <h2 class="h6">Somente leitura</h2>
                     <p class="text-muted mb-0">Apenas o criador do bolão pode cadastrar jogos.</p>
                   </div>
                 </div>
               `;
+          const editNameCard = authorized
+            ? `
+                <div class="card shadow-sm mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Editar nome do bolão</h2>
+                    <form method="post" action="/b/${id}/update">
+                      <div class="mb-3">
+                        <label class="form-label">Nome do bolão</label>
+                        <input class="form-control" name="name" maxlength="80" value="${escapeHtml(
+                          bolao.name || ""
+                        )}" />
+                        <div class="form-text">Opcional. Deixe em branco para remover o nome.</div>
+                      </div>
+                      <button class="btn btn-outline-primary w-100">Salvar nome</button>
+                    </form>
+                  </div>
+                </div>
+              `
+            : "";
           const subscribeNotice =
             req.query.subscribe === "sent"
               ? `<div class="alert alert-success">Enviamos um email com o link de confirmação.</div>`
@@ -762,7 +850,14 @@ app.get("/b/:id", async (req, res) => {
           const body = `
             <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-4">
               <div>
-                <h1 class="h4 page-title">Bolão ${escapeHtml(id)}</h1>
+                <h1 class="h4 page-title">${escapeHtml(bolaoTitle)}</h1>
+                ${
+                  bolaoSubtitle
+                    ? `<div class="text-muted small mb-2">ID ${escapeHtml(
+                        bolaoSubtitle
+                      )}</div>`
+                    : ""
+                }
                 ${resultBadge}
               </div>
               <div class="share-panel w-100 w-lg-auto">
@@ -781,6 +876,7 @@ app.get("/b/:id", async (req, res) => {
             <div class="row">
               <div class="col-lg-4">
                 ${addGameCard}
+                ${editNameCard}
                 ${subscribeCard}
               </div>
               <div class="col-lg-8">
@@ -795,7 +891,7 @@ app.get("/b/:id", async (req, res) => {
               </div>
             </div>
           `;
-          res.send(renderLayout(`Bolão ${id}`, body));
+          res.send(renderLayout(bolaoTitle, body, ogTags));
         }
       );
     }
@@ -816,10 +912,7 @@ app.post("/b/:id/subscribe", async (req, res) => {
       .send(renderLayout("Erro", "Email inválido."));
   }
   try {
-    const bolao = await dbGet(
-      "SELECT id FROM boloes WHERE id = ?",
-      [id]
-    );
+    const bolao = await dbGet("SELECT id, name FROM boloes WHERE id = ?", [id]);
     if (!bolao) {
       return res
         .status(404)
@@ -839,7 +932,7 @@ app.post("/b/:id/subscribe", async (req, res) => {
       [id, email, token, createdAt]
     );
     const { html, text } = buildSubscriptionEmail({
-      bolaoId: id,
+      bolao,
       token,
     });
     await mailTransport.sendMail({
@@ -890,6 +983,49 @@ app.get("/b/:id/confirm", async (req, res) => {
     console.error("Falha ao confirmar assinatura:", err);
     res.redirect(`/b/${id}?confirm=invalid`);
   }
+});
+
+app.post("/b/:id/update", (req, res) => {
+  const { id } = req.params;
+  if (!isValidBolaoId(id)) {
+    return res
+      .status(404)
+      .send(renderLayout("Erro", "Bolão não encontrado."));
+  }
+  db.get(
+    "SELECT id, edit_token FROM boloes WHERE id = ?",
+    [id],
+    (err, bolao) => {
+      if (err || !bolao) {
+        return res
+          .status(404)
+          .send(renderLayout("Erro", "Bolão não encontrado."));
+      }
+      if (!isAuthorizedForBolao(req, bolao)) {
+        return res
+          .status(403)
+          .send(renderLayout("Erro", "Você não tem permissão para editar este bolão."));
+      }
+      const { name, error } = parseBolaoName(req.body.name);
+      if (error) {
+        return res
+          .status(400)
+          .send(renderLayout("Erro", escapeHtml(error)));
+      }
+      db.run(
+        "UPDATE boloes SET name = ? WHERE id = ?",
+        [name, id],
+        (errUpdate) => {
+          if (errUpdate) {
+            return res
+              .status(500)
+              .send(renderLayout("Erro", "Não foi possível atualizar o bolão."));
+          }
+          res.redirect(`/b/${id}?token=${bolao.edit_token}`);
+        }
+      );
+    }
+  );
 });
 
 app.post("/b/:id/games", (req, res) => {
@@ -944,7 +1080,7 @@ app.post("/b/:id/games", (req, res) => {
 
 app.get("/admin", requireAdmin, (req, res) => {
   db.all(
-    "SELECT id, draw_number, created_at FROM boloes ORDER BY created_at DESC",
+    "SELECT id, name, draw_number, created_at FROM boloes ORDER BY created_at DESC",
     (err, boloes) => {
       if (err) {
         return res
@@ -957,9 +1093,19 @@ app.get("/admin", requireAdmin, (req, res) => {
               const shareLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
                 bolao.id
               )}`;
+              const title = getBolaoDisplayName(bolao);
+              const subtitle =
+                title === `Bolão ${bolao.id}` ? "" : `ID ${bolao.id}`;
               return `<li class="list-group-item d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
                 <div>
-                  <strong>Bolão ${escapeHtml(bolao.id)}</strong><br />
+                  <strong>${escapeHtml(title)}</strong><br />
+                  ${
+                    subtitle
+                      ? `<small class="text-muted">${escapeHtml(
+                          subtitle
+                        )}</small><br />`
+                      : ""
+                  }
                   <small class="text-muted">Concurso ${escapeHtml(
                     bolao.draw_number
                   )}</small><br />
@@ -1032,7 +1178,7 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
       .send(renderLayout("Admin", "Bolão não encontrado."));
   }
   db.get(
-    "SELECT id, draw_number, edit_token, created_at FROM boloes WHERE id = ?",
+    "SELECT id, name, draw_number, edit_token, created_at FROM boloes WHERE id = ?",
     [id],
     (err, bolao) => {
       if (err || !bolao) {
@@ -1055,6 +1201,9 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
           const adminLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
             bolao.id
           )}?token=${encodeURIComponent(bolao.edit_token)}`;
+          const bolaoTitle = getBolaoDisplayName(bolao);
+          const bolaoSubtitle =
+            bolaoTitle === `Bolão ${bolao.id}` ? "" : `ID ${bolao.id}`;
           const gamesHtml = games.length
             ? games
                 .map((game) => {
@@ -1071,9 +1220,16 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
           const body = `
             <div class="d-flex justify-content-between align-items-center mb-3">
               <div>
-                <h1 class="h4">Administração do bolão ${escapeHtml(
-                  bolao.id
+                <h1 class="h4">Administração do ${escapeHtml(
+                  bolaoTitle
                 )}</h1>
+                ${
+                  bolaoSubtitle
+                    ? `<small class="text-muted d-block">${escapeHtml(
+                        bolaoSubtitle
+                      )}</small>`
+                    : ""
+                }
                 <small class="text-muted">Criado em ${escapeHtml(
                   new Date(bolao.created_at).toLocaleString("pt-BR")
                 )}</small>
@@ -1084,8 +1240,15 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
               <div class="col-lg-4">
                 <div class="card shadow-sm mb-4">
                   <div class="card-body">
-                    <h2 class="h6">Editar concurso</h2>
+                    <h2 class="h6">Editar bolão</h2>
                     <form method="post" action="/admin/boloes/${bolao.id}/update">
+                      <div class="mb-3">
+                        <label class="form-label">Nome do bolão</label>
+                        <input class="form-control" name="name" maxlength="80" value="${escapeHtml(
+                          bolao.name || ""
+                        )}" />
+                        <div class="form-text">Opcional. Deixe em branco para remover o nome.</div>
+                      </div>
                       <div class="mb-3">
                         <label class="form-label">Número do concurso</label>
                         <input class="form-control" name="drawNumber" type="number" min="1" max="9999" step="1" inputmode="numeric" value="${escapeHtml(
@@ -1153,9 +1316,15 @@ app.post("/admin/boloes/:id/update", requireAdmin, (req, res) => {
       .status(400)
       .send(renderLayout("Admin", escapeHtml(error)));
   }
+  const { name, error: nameError } = parseBolaoName(req.body.name);
+  if (nameError) {
+    return res
+      .status(400)
+      .send(renderLayout("Admin", escapeHtml(nameError)));
+  }
   db.run(
-    "UPDATE boloes SET draw_number = ? WHERE id = ?",
-    [drawNumber, id],
+    "UPDATE boloes SET name = ?, draw_number = ? WHERE id = ?",
+    [name, drawNumber, id],
     (err) => {
       if (err) {
         return res
@@ -1232,6 +1401,7 @@ app.use((req, res) => {
 });
 
 initDb();
+ensureColumnExists("boloes", "name", "TEXT");
 ensureColumnExists("boloes", "edit_token", "TEXT", backfillEditTokens);
 startPolling();
 
