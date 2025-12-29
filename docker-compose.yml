@@ -8,8 +8,13 @@ services:
     environment:
       - POLL_INTERVAL_MS=300000
       - DB_PATH=/app/data/megasena.db
+      - SMTP_HOST=host.docker.internal
+      - SMTP_PORT=25
+      - FROM_DOMAIN=bru.to
     volumes:
       - megasena-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   megasena-data:
