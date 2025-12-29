@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - POLL_INTERVAL_MS=300000
+      - DB_PATH=/app/data/megasena.db
+    volumes:
+      - megasena-data:/app/data
+
+volumes:
+  megasena-data:
