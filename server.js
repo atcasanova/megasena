@@ -9,6 +9,9 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data", "megasena.db
 const API_URL =
   "https://servicebus2.caixa.gov.br/portaldeloterias/api/megasena/";
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 300000);
+const SHARE_BASE_URL = process.env.SHARE_BASE_URL || "https://bolao.bru.to";
+const ADMIN_USER = process.env.ADMIN_USER || "atcasanova";
+const ADMIN_PASS = process.env.ADMIN_PASS || "atcasanova123atcasanova";
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -23,6 +26,7 @@ function initDb() {
       `CREATE TABLE IF NOT EXISTS boloes (
         id TEXT PRIMARY KEY,
         draw_number INTEGER NOT NULL,
+        edit_token TEXT NOT NULL,
         created_at TEXT NOT NULL
       )`
     );
@@ -44,6 +48,74 @@ function initDb() {
       )`
     );
   });
+}
+
+function ensureColumnExists(table, column, definition, onComplete) {
+  db.all(`PRAGMA table_info(${table})`, (err, rows) => {
+    if (err) {
+      console.error(`Falha ao ler schema de ${table}:`, err);
+      return;
+    }
+    const exists = rows.some((row) => row.name === column);
+    if (!exists) {
+      db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, () => {
+        if (onComplete) onComplete();
+      });
+      return;
+    }
+    if (onComplete) onComplete();
+  });
+}
+
+function backfillEditTokens() {
+  db.all(
+    "SELECT id FROM boloes WHERE edit_token IS NULL OR edit_token = ''",
+    (err, rows) => {
+      if (err) {
+        console.error("Falha ao gerar tokens de edição:", err);
+        return;
+      }
+      rows.forEach((row) => {
+        const token = crypto.randomBytes(16).toString("hex");
+        db.run("UPDATE boloes SET edit_token = ? WHERE id = ?", [
+          token,
+          row.id,
+        ]);
+      });
+    }
+  );
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  return header.split(";").reduce((acc, part) => {
+    const [name, ...value] = part.trim().split("=");
+    if (!name) return acc;
+    acc[name] = decodeURIComponent(value.join("="));
+    return acc;
+  }, {});
+}
+
+function isAuthorizedForBolao(req, bolao) {
+  const cookies = parseCookies(req);
+  const cookieToken = cookies[`bolao_admin_${bolao.id}`];
+  const queryToken = req.query.token;
+  return (
+    (cookieToken && cookieToken === bolao.edit_token) ||
+    (queryToken && queryToken === bolao.edit_token)
+  );
+}
+
+function requireAdmin(req, res, next) {
+  const header = req.headers.authorization || "";
+  const [, encoded] = header.split(" ");
+  const decoded = encoded ? Buffer.from(encoded, "base64").toString() : "";
+  const [user, pass] = decoded.split(":");
+  if (user === ADMIN_USER && pass === ADMIN_PASS) {
+    return next();
+  }
+  res.setHeader("WWW-Authenticate", 'Basic realm="Admin"');
+  res.status(401).send(renderLayout("Admin", "Autenticação necessária."));
 }
 
 function renderLayout(title, body) {
@@ -200,17 +272,18 @@ app.post("/bolao", (req, res) => {
       .send(renderLayout("Erro", "Número do concurso inválido."));
   }
   const id = generateBolaoId();
+  const editToken = crypto.randomBytes(16).toString("hex");
   const createdAt = new Date().toISOString();
   db.run(
-    "INSERT INTO boloes (id, draw_number, created_at) VALUES (?, ?, ?)",
-    [id, drawNumber, createdAt],
+    "INSERT INTO boloes (id, draw_number, edit_token, created_at) VALUES (?, ?, ?, ?)",
+    [id, drawNumber, editToken, createdAt],
     (err) => {
       if (err) {
         return res
           .status(500)
           .send(renderLayout("Erro", "Não foi possível criar o bolão."));
       }
-      res.redirect(`/b/${id}`);
+      res.redirect(`/b/${id}?token=${editToken}`);
     }
   );
 });
@@ -218,13 +291,22 @@ app.post("/bolao", (req, res) => {
 app.get("/b/:id", async (req, res) => {
   const { id } = req.params;
   db.get(
-    "SELECT id, draw_number FROM boloes WHERE id = ?",
+    "SELECT id, draw_number, edit_token FROM boloes WHERE id = ?",
     [id],
     async (err, bolao) => {
       if (err || !bolao) {
         return res
           .status(404)
           .send(renderLayout("Bolão", "Bolão não encontrado."));
+      }
+      const authorized = isAuthorizedForBolao(req, bolao);
+      if (req.query.token && req.query.token === bolao.edit_token) {
+        res.setHeader(
+          "Set-Cookie",
+          `bolao_admin_${bolao.id}=${encodeURIComponent(
+            bolao.edit_token
+          )}; Path=/; SameSite=Lax`
+        );
       }
       db.all(
         "SELECT id, numbers FROM games WHERE bolao_id = ? ORDER BY id DESC",
@@ -275,19 +357,10 @@ app.get("/b/:id", async (req, res) => {
                 .join("")
             : `<li class="list-group-item text-muted">Nenhum jogo cadastrado ainda.</li>`;
 
-          const body = `
-            <div class="d-flex justify-content-between align-items-center mb-3">
-              <div>
-                <h1 class="h4">Bolão ${id}</h1>
-                ${resultBadge}
-              </div>
-              <div>
-                <small class="text-muted">Link para compartilhar</small><br />
-                <code>${req.protocol}://${req.get("host")}/b/${id}</code>
-              </div>
-            </div>
-            <div class="row">
-              <div class="col-lg-4">
+          const adminLink = `${SHARE_BASE_URL}/b/${id}?token=${bolao.edit_token}`;
+          const shareLink = `${SHARE_BASE_URL}/b/${id}`;
+          const addGameCard = authorized
+            ? `
                 <div class="card shadow-sm mb-4">
                   <div class="card-body">
                     <h2 class="h6">Adicionar jogo</h2>
@@ -301,6 +374,35 @@ app.get("/b/:id", async (req, res) => {
                     </form>
                   </div>
                 </div>
+              `
+            : `
+                <div class="card border-0 bg-white shadow-sm mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Somente leitura</h2>
+                    <p class="text-muted mb-0">Apenas o criador do bolão pode cadastrar jogos.</p>
+                  </div>
+                </div>
+              `;
+
+          const body = `
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <div>
+                <h1 class="h4">Bolão ${id}</h1>
+                ${resultBadge}
+              </div>
+              <div>
+                <small class="text-muted">Link para compartilhar</small><br />
+                <code>${shareLink}</code>
+                ${
+                  authorized
+                    ? `<div class="mt-2"><small class="text-muted">Link do administrador</small><br /><code>${adminLink}</code></div>`
+                    : ""
+                }
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-lg-4">
+                ${addGameCard}
               </div>
               <div class="col-lg-8">
                 <div class="card shadow-sm">
@@ -323,11 +425,227 @@ app.get("/b/:id", async (req, res) => {
 
 app.post("/b/:id/games", (req, res) => {
   const { id } = req.params;
+  db.get(
+    "SELECT id, edit_token FROM boloes WHERE id = ?",
+    [id],
+    (err, bolao) => {
+      if (err || !bolao) {
+        return res
+          .status(404)
+          .send(renderLayout("Erro", "Bolão não encontrado."));
+      }
+      if (!isAuthorizedForBolao(req, bolao)) {
+        return res
+          .status(403)
+          .send(renderLayout("Erro", "Apenas o criador do bolão pode cadastrar jogos."));
+      }
+      const { numbers, error } = parseNumbers(String(req.body.numbers || ""));
+      if (error) {
+        return res
+          .status(400)
+          .send(
+            renderLayout(
+              "Erro",
+              `<p>${error}</p><p><a href="/b/${id}">Voltar</a></p>`
+            )
+          );
+      }
+      db.run(
+        "INSERT INTO games (bolao_id, numbers, created_at) VALUES (?, ?, ?)",
+        [id, JSON.stringify(numbers), new Date().toISOString()],
+        (errInsert) => {
+          if (errInsert) {
+            return res
+              .status(500)
+              .send(renderLayout("Erro", "Não foi possível salvar o jogo."));
+          }
+          res.redirect(`/b/${id}?token=${bolao.edit_token}`);
+        }
+      );
+    }
+  );
+});
+
+app.get("/admin", requireAdmin, (req, res) => {
+  db.all(
+    "SELECT id, draw_number, created_at FROM boloes ORDER BY created_at DESC",
+    (err, boloes) => {
+      if (err) {
+        return res
+          .status(500)
+          .send(renderLayout("Admin", "Falha ao carregar bolões."));
+      }
+      const list = boloes.length
+        ? boloes
+            .map((bolao) => {
+              const shareLink = `${SHARE_BASE_URL}/b/${bolao.id}`;
+              return `<li class="list-group-item d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                <div>
+                  <strong>Bolão ${bolao.id}</strong><br />
+                  <small class="text-muted">Concurso ${bolao.draw_number}</small><br />
+                  <small class="text-muted">Link: ${shareLink}</small>
+                </div>
+                <div class="d-flex gap-2">
+                  <a class="btn btn-sm btn-outline-primary" href="/admin/boloes/${bolao.id}">Editar</a>
+                  <form method="post" action="/admin/boloes/${bolao.id}/delete" onsubmit="return confirm('Excluir este bolão?');">
+                    <button class="btn btn-sm btn-outline-danger">Excluir</button>
+                  </form>
+                </div>
+              </li>`;
+            })
+            .join("")
+        : `<li class="list-group-item text-muted">Nenhum bolão cadastrado.</li>`;
+
+      const body = `
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <div>
+            <h1 class="h4">Área administrativa</h1>
+            <p class="text-muted mb-0">Gerencie todos os bolões cadastrados.</p>
+          </div>
+        </div>
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <ul class="list-group list-group-flush">
+              ${list}
+            </ul>
+          </div>
+        </div>
+      `;
+      res.send(renderLayout("Admin", body));
+    }
+  );
+});
+
+app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
+  const { id } = req.params;
+  db.get(
+    "SELECT id, draw_number, edit_token, created_at FROM boloes WHERE id = ?",
+    [id],
+    (err, bolao) => {
+      if (err || !bolao) {
+        return res
+          .status(404)
+          .send(renderLayout("Admin", "Bolão não encontrado."));
+      }
+      db.all(
+        "SELECT id, numbers FROM games WHERE bolao_id = ? ORDER BY id DESC",
+        [id],
+        (errGames, games) => {
+          if (errGames) {
+            return res
+              .status(500)
+              .send(renderLayout("Admin", "Falha ao carregar jogos."));
+          }
+          const shareLink = `${SHARE_BASE_URL}/b/${bolao.id}`;
+          const adminLink = `${SHARE_BASE_URL}/b/${bolao.id}?token=${bolao.edit_token}`;
+          const gamesHtml = games.length
+            ? games
+                .map((game) => {
+                  const numbers = JSON.parse(game.numbers).join(" ");
+                  return `<li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>${numbers}</span>
+                  </li>`;
+                })
+                .join("")
+            : `<li class="list-group-item text-muted">Nenhum jogo cadastrado.</li>`;
+
+          const body = `
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <div>
+                <h1 class="h4">Administração do bolão ${bolao.id}</h1>
+                <small class="text-muted">Criado em ${new Date(
+                  bolao.created_at
+                ).toLocaleString("pt-BR")}</small>
+              </div>
+              <a class="btn btn-outline-secondary" href="/admin">Voltar</a>
+            </div>
+            <div class="row g-4">
+              <div class="col-lg-4">
+                <div class="card shadow-sm mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Editar concurso</h2>
+                    <form method="post" action="/admin/boloes/${bolao.id}/update">
+                      <div class="mb-3">
+                        <label class="form-label">Número do concurso</label>
+                        <input class="form-control" name="drawNumber" type="number" min="1" value="${bolao.draw_number}" required />
+                      </div>
+                      <button class="btn btn-primary w-100">Salvar alterações</button>
+                    </form>
+                  </div>
+                </div>
+                <div class="card shadow-sm mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Adicionar jogo</h2>
+                    <form method="post" action="/admin/boloes/${bolao.id}/games">
+                      <div class="mb-3">
+                        <label class="form-label">Dezenas (6 a 15)</label>
+                        <input class="form-control" name="numbers" placeholder="Ex: 01 05 12 23 34 45" required />
+                      </div>
+                      <button class="btn btn-outline-primary w-100">Salvar jogo</button>
+                    </form>
+                  </div>
+                </div>
+                <div class="card border-0 bg-white shadow-sm">
+                  <div class="card-body">
+                    <h2 class="h6">Links</h2>
+                    <p class="small text-muted mb-2">Compartilhamento:</p>
+                    <code class="small">${shareLink}</code>
+                    <p class="small text-muted mt-3 mb-2">Administrador:</p>
+                    <code class="small">${adminLink}</code>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-8">
+                <div class="card shadow-sm mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Jogos cadastrados</h2>
+                    <ul class="list-group list-group-flush">
+                      ${gamesHtml}
+                    </ul>
+                  </div>
+                </div>
+                <form method="post" action="/admin/boloes/${bolao.id}/delete" onsubmit="return confirm('Excluir este bolão?');">
+                  <button class="btn btn-danger">Excluir bolão</button>
+                </form>
+              </div>
+            </div>
+          `;
+          res.send(renderLayout("Admin", body));
+        }
+      );
+    }
+  );
+});
+
+app.post("/admin/boloes/:id/update", requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const drawNumber = Number(req.body.drawNumber);
+  if (!drawNumber || Number.isNaN(drawNumber)) {
+    return res
+      .status(400)
+      .send(renderLayout("Admin", "Número do concurso inválido."));
+  }
+  db.run(
+    "UPDATE boloes SET draw_number = ? WHERE id = ?",
+    [drawNumber, id],
+    (err) => {
+      if (err) {
+        return res
+          .status(500)
+          .send(renderLayout("Admin", "Falha ao atualizar bolão."));
+      }
+      res.redirect(`/admin/boloes/${id}`);
+    }
+  );
+});
+
+app.post("/admin/boloes/:id/games", requireAdmin, (req, res) => {
+  const { id } = req.params;
   const { numbers, error } = parseNumbers(String(req.body.numbers || ""));
   if (error) {
     return res
       .status(400)
-      .send(renderLayout("Erro", `<p>${error}</p><p><a href="/b/${id}">Voltar</a></p>`));
+      .send(renderLayout("Admin", `<p>${error}</p><p><a href="/admin/boloes/${id}">Voltar</a></p>`));
   }
   db.run(
     "INSERT INTO games (bolao_id, numbers, created_at) VALUES (?, ?, ?)",
@@ -336,11 +654,32 @@ app.post("/b/:id/games", (req, res) => {
       if (err) {
         return res
           .status(500)
-          .send(renderLayout("Erro", "Não foi possível salvar o jogo."));
+          .send(renderLayout("Admin", "Não foi possível salvar o jogo."));
       }
-      res.redirect(`/b/${id}`);
+      res.redirect(`/admin/boloes/${id}`);
     }
   );
+});
+
+app.post("/admin/boloes/:id/delete", requireAdmin, (req, res) => {
+  const { id } = req.params;
+  db.serialize(() => {
+    db.run("DELETE FROM games WHERE bolao_id = ?", [id], (err) => {
+      if (err) {
+        return res
+          .status(500)
+          .send(renderLayout("Admin", "Falha ao excluir jogos do bolão."));
+      }
+      db.run("DELETE FROM boloes WHERE id = ?", [id], (errDelete) => {
+        if (errDelete) {
+          return res
+            .status(500)
+            .send(renderLayout("Admin", "Falha ao excluir bolão."));
+        }
+        res.redirect("/admin");
+      });
+    });
+  });
 });
 
 app.use((req, res) => {
@@ -348,6 +687,7 @@ app.use((req, res) => {
 });
 
 initDb();
+ensureColumnExists("boloes", "edit_token", "TEXT", backfillEditTokens);
 startPolling();
 
 app.listen(PORT, () => {
