@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const express = require("express");
 const fs = require("fs");
 const helmet = require("helmet");
+const nodemailer = require("nodemailer");
 const path = require("path");
 const sqlite3 = require("sqlite3");
 
@@ -13,6 +14,15 @@ const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 300000);
 const SHARE_BASE_URL = process.env.SHARE_BASE_URL || "https://bolao.bru.to";
 const ADMIN_USER = process.env.ADMIN_USER || "atcasanova";
 const ADMIN_PASS = process.env.ADMIN_PASS || "atcasanova123atcasanova";
+const SMTP_HOST = process.env.SMTP_HOST || "127.0.0.1";
+const SMTP_PORT = Number(process.env.SMTP_PORT || 25);
+const FROM_DOMAIN = process.env.FROM_DOMAIN || "bru.to";
+
+const mailTransport = nodemailer.createTransport({
+  host: SMTP_HOST,
+  port: SMTP_PORT,
+  secure: false,
+});
 
 const app = express();
 app.use(
@@ -62,6 +72,20 @@ function initDb() {
         numbers TEXT NOT NULL,
         draw_date TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS bolao_subscribers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bolao_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        status TEXT NOT NULL,
+        verification_token TEXT,
+        created_at TEXT NOT NULL,
+        verified_at TEXT,
+        last_notified_draw INTEGER,
+        UNIQUE(bolao_id, email),
+        FOREIGN KEY (bolao_id) REFERENCES boloes(id)
       )`
     );
   });
@@ -207,6 +231,163 @@ function parseDrawNumber(input) {
   return { drawNumber };
 }
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function dbGet(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) return reject(err);
+      resolve(row);
+    });
+  });
+}
+
+function dbAll(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows);
+    });
+  });
+}
+
+function dbRun(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) return reject(err);
+      resolve(this);
+    });
+  });
+}
+
+function buildResultsEmailHtml({ bolao, draw, games }) {
+  const drawNumbers = new Set(draw.numbers);
+  const gamesHtml = games.length
+    ? games
+        .map((game) => {
+          const numbers = JSON.parse(game.numbers);
+          const hits = numbers.filter((num) => drawNumbers.has(num));
+          const hitLabel =
+            hits.length >= 6
+              ? "🎉 Premiado!"
+              : hits.length >= 4
+              ? "Boa!"
+              : "Confira";
+          const numberBadges = numbers
+            .map((num) => {
+              const active = drawNumbers.has(num);
+              const style = active
+                ? "background:#16a34a;color:#fff;"
+                : "background:#f3f4f6;color:#111827;";
+              return `<span style="display:inline-block;margin:2px 4px;padding:6px 10px;border-radius:999px;font-size:12px;${style}">${escapeHtml(
+                num
+              )}</span>`;
+            })
+            .join("");
+          return `
+            <tr>
+              <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
+                <div style="margin-bottom:6px;">${numberBadges}</div>
+                <strong style="color:#111827;">${hits.length} acertos</strong>
+                <span style="margin-left:8px;color:#6b7280;">${hitLabel}</span>
+              </td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `
+        <tr>
+          <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;color:#6b7280;">
+            Nenhum jogo cadastrado para este bolão.
+          </td>
+        </tr>
+      `;
+
+  return `
+    <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;">
+      <div style="max-width:620px;margin:0 auto;background:#ffffff;border-radius:16px;padding:24px;border:1px solid #e5e7eb;">
+        <h1 style="margin-top:0;font-size:22px;color:#111827;">Resultados do seu bolão</h1>
+        <p style="color:#4b5563;font-size:14px;">
+          O resultado do concurso <strong>${escapeHtml(
+            draw.number
+          )}</strong> já está disponível.
+        </p>
+        <div style="background:#eff6ff;border-radius:12px;padding:16px;margin:16px 0;">
+          <div style="font-size:14px;color:#1e3a8a;margin-bottom:6px;">Dezenas sorteadas</div>
+          <div>
+            ${draw.numbers
+              .map(
+                (num) =>
+                  `<span style="display:inline-block;margin:2px 4px;padding:6px 10px;border-radius:999px;background:#2563eb;color:#fff;font-size:12px;">${escapeHtml(
+                    num
+                  )}</span>`
+              )
+              .join("")}
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:#1e3a8a;">
+            Apuração em ${escapeHtml(draw.drawDate)}
+          </div>
+        </div>
+        <h2 style="font-size:16px;color:#111827;margin-bottom:8px;">Bolão ${
+          bolao.id
+        }</h2>
+        <table style="width:100%;border-collapse:collapse;">
+          <tbody>
+            ${gamesHtml}
+          </tbody>
+        </table>
+        <p style="font-size:12px;color:#6b7280;margin-top:16px;">
+          Você está recebendo este email porque confirmou o acompanhamento deste bolão.
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+function buildResultsEmailText({ bolao, draw, games }) {
+  const drawNumbers = draw.numbers.join(" ");
+  const gamesText = games.length
+    ? games
+        .map((game) => {
+          const numbers = JSON.parse(game.numbers);
+          const hits = numbers.filter((num) => draw.numbers.includes(num));
+          return `- ${numbers.join(" ")} (${hits.length} acertos)`;
+        })
+        .join("\n")
+    : "- Nenhum jogo cadastrado.";
+  return `Resultados do seu bolão ${bolao.id}\nConcurso ${
+    draw.number
+  } (${draw.drawDate})\nDezenas: ${drawNumbers}\n\nJogos:\n${gamesText}`;
+}
+
+function buildSubscriptionEmail({ bolaoId, token }) {
+  const confirmationLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
+    bolaoId
+  )}/confirm?token=${encodeURIComponent(token)}`;
+  const html = `
+    <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;">
+      <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:16px;padding:24px;border:1px solid #e5e7eb;">
+        <h1 style="margin-top:0;font-size:20px;color:#111827;">Confirme seu email</h1>
+        <p style="color:#4b5563;font-size:14px;">
+          Clique no botão abaixo para confirmar que você quer acompanhar o bolão ${escapeHtml(
+            bolaoId
+          )}.
+        </p>
+        <p>
+          <a href="${confirmationLink}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-size:14px;">Confirmar assinatura</a>
+        </p>
+        <p style="font-size:12px;color:#6b7280;">Ou copie e cole este link no navegador:<br />${escapeHtml(
+          confirmationLink
+        )}</p>
+      </div>
+    </div>
+  `;
+  const text = `Confirme seu email para acompanhar o bolão ${bolaoId}: ${confirmationLink}`;
+  return { html, text };
+}
+
 function fetchLatestDraw() {
   return fetch(API_URL)
     .then((res) => res.json())
@@ -227,7 +408,7 @@ function fetchLatestDraw() {
 
 function storeDraw(draw) {
   const now = new Date().toISOString();
-  db.run(
+  return dbRun(
     `INSERT INTO draws (number, numbers, draw_date, updated_at)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(number) DO UPDATE SET
@@ -241,7 +422,10 @@ function storeDraw(draw) {
 function startPolling() {
   const poll = () => {
     fetchLatestDraw()
-      .then((draw) => storeDraw(draw))
+      .then(async (draw) => {
+        await storeDraw(draw);
+        await notifySubscribersForDraw(draw);
+      })
       .catch((err) => console.error("Falha ao buscar concurso:", err));
   };
   poll();
@@ -264,6 +448,58 @@ function getDraw(number) {
       }
     );
   });
+}
+
+async function notifySubscribersForDraw(draw) {
+  try {
+    const boloes = await dbAll(
+      "SELECT id, draw_number FROM boloes WHERE draw_number = ?",
+      [draw.number]
+    );
+    if (!boloes.length) return;
+
+    for (const bolao of boloes) {
+      const subscribers = await dbAll(
+        `SELECT id, email, last_notified_draw
+         FROM bolao_subscribers
+         WHERE bolao_id = ?
+           AND status = 'verified'
+           AND (last_notified_draw IS NULL OR last_notified_draw < ?)`,
+        [bolao.id, draw.number]
+      );
+      if (!subscribers.length) continue;
+
+      const games = await dbAll(
+        "SELECT id, numbers FROM games WHERE bolao_id = ? ORDER BY id DESC",
+        [bolao.id]
+      );
+      const emailHtml = buildResultsEmailHtml({ bolao, draw, games });
+      const emailText = buildResultsEmailText({ bolao, draw, games });
+
+      for (const subscriber of subscribers) {
+        try {
+          await mailTransport.sendMail({
+            from: `"Bolão ${bolao.id}" <bolao-${bolao.id}@${FROM_DOMAIN}>`,
+            to: subscriber.email,
+            subject: "Resultados do seu bolão",
+            text: emailText,
+            html: emailHtml,
+          });
+          await dbRun(
+            "UPDATE bolao_subscribers SET last_notified_draw = ? WHERE id = ?",
+            [draw.number, subscriber.id]
+          );
+        } catch (err) {
+          console.error(
+            `Falha ao enviar resultado para ${subscriber.email}:`,
+            err
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Falha ao notificar assinantes:", err);
+  }
 }
 
 app.get("/", (req, res) => {
@@ -432,6 +668,30 @@ app.get("/b/:id", async (req, res) => {
                   </div>
                 </div>
               `;
+          const subscribeNotice =
+            req.query.subscribe === "sent"
+              ? `<div class="alert alert-success">Enviamos um email com o link de confirmação.</div>`
+              : req.query.confirm === "ok"
+              ? `<div class="alert alert-success">Email confirmado! Você receberá os resultados deste bolão.</div>`
+              : req.query.confirm === "invalid"
+              ? `<div class="alert alert-danger">Link de confirmação inválido ou expirado.</div>`
+              : "";
+
+          const subscribeCard = `
+            <div class="card shadow-sm mb-4">
+              <div class="card-body">
+                <h2 class="h6">Receber resultados por email</h2>
+                <p class="text-muted small mb-3">Confirme seu email para acompanhar este bolão.</p>
+                <form method="post" action="/b/${id}/subscribe">
+                  <div class="mb-3">
+                    <label class="form-label">Seu email</label>
+                    <input class="form-control" name="email" type="email" autocomplete="email" required />
+                  </div>
+                  <button class="btn btn-outline-primary w-100">Assinar</button>
+                </form>
+              </div>
+            </div>
+          `;
 
           const body = `
             <div class="d-flex justify-content-between align-items-center mb-3">
@@ -451,9 +711,11 @@ app.get("/b/:id", async (req, res) => {
                 }
               </div>
             </div>
+            ${subscribeNotice}
             <div class="row">
               <div class="col-lg-4">
                 ${addGameCard}
+                ${subscribeCard}
               </div>
               <div class="col-lg-8">
                 <div class="card shadow-sm">
@@ -472,6 +734,96 @@ app.get("/b/:id", async (req, res) => {
       );
     }
   );
+});
+
+app.post("/b/:id/subscribe", async (req, res) => {
+  const { id } = req.params;
+  if (!isValidBolaoId(id)) {
+    return res
+      .status(404)
+      .send(renderLayout("Erro", "Bolão não encontrado."));
+  }
+  const email = String(req.body.email || "").trim().toLowerCase();
+  if (!isValidEmail(email)) {
+    return res
+      .status(400)
+      .send(renderLayout("Erro", "Email inválido."));
+  }
+  try {
+    const bolao = await dbGet(
+      "SELECT id FROM boloes WHERE id = ?",
+      [id]
+    );
+    if (!bolao) {
+      return res
+        .status(404)
+        .send(renderLayout("Erro", "Bolão não encontrado."));
+    }
+    const token = crypto.randomBytes(16).toString("hex");
+    const createdAt = new Date().toISOString();
+    await dbRun(
+      `INSERT INTO bolao_subscribers (bolao_id, email, status, verification_token, created_at)
+       VALUES (?, ?, 'pending', ?, ?)
+       ON CONFLICT(bolao_id, email) DO UPDATE SET
+         status = 'pending',
+         verification_token = excluded.verification_token,
+         created_at = excluded.created_at,
+         verified_at = NULL,
+         last_notified_draw = NULL`,
+      [id, email, token, createdAt]
+    );
+    const { html, text } = buildSubscriptionEmail({
+      bolaoId: id,
+      token,
+    });
+    await mailTransport.sendMail({
+      from: `"Bolão ${id}" <bolao-${id}@${FROM_DOMAIN}>`,
+      to: email,
+      subject: "Confirme seu email",
+      text,
+      html,
+    });
+    res.redirect(`/b/${id}?subscribe=sent`);
+  } catch (err) {
+    console.error("Falha ao cadastrar assinatura:", err);
+    res
+      .status(500)
+      .send(renderLayout("Erro", "Não foi possível enviar o email."));
+  }
+});
+
+app.get("/b/:id/confirm", async (req, res) => {
+  const { id } = req.params;
+  const token = String(req.query.token || "").trim();
+  if (!isValidBolaoId(id)) {
+    return res
+      .status(404)
+      .send(renderLayout("Erro", "Bolão não encontrado."));
+  }
+  if (!token) {
+    return res.redirect(`/b/${id}?confirm=invalid`);
+  }
+  try {
+    const subscriber = await dbGet(
+      "SELECT id FROM bolao_subscribers WHERE bolao_id = ? AND verification_token = ?",
+      [id, token]
+    );
+    if (!subscriber) {
+      return res.redirect(`/b/${id}?confirm=invalid`);
+    }
+    await dbRun(
+      `UPDATE bolao_subscribers
+       SET status = 'verified',
+           verification_token = NULL,
+           verified_at = ?
+       WHERE id = ?`,
+      [new Date().toISOString(), subscriber.id]
+    );
+    res.redirect(`/b/${id}?confirm=ok`);
+  } catch (err) {
+    console.error("Falha ao confirmar assinatura:", err);
+    res.redirect(`/b/${id}?confirm=invalid`);
+  }
 });
 
 app.post("/b/:id/games", (req, res) => {
