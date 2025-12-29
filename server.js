@@ -69,6 +69,11 @@ app.use(express.json());
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new sqlite3.Database(DB_PATH);
 
+function logAction(message, details = {}) {
+  const payload = Object.keys(details).length ? ` | ${JSON.stringify(details)}` : "";
+  console.log(`[bolao] ${message}${payload}`);
+}
+
 function initDb() {
   db.serialize(() => {
     db.run(
@@ -594,6 +599,11 @@ async function notifySubscribersForDraw(draw) {
             text: emailText,
             html: emailHtml,
           });
+          logAction("results_sent", {
+            bolaoId: bolao.id,
+            email: subscriber.email,
+            drawNumber: draw.number,
+          });
           await dbRun(
             "UPDATE bolao_subscribers SET last_notified_draw = ? WHERE id = ?",
             [draw.number, subscriber.id]
@@ -677,6 +687,7 @@ app.post("/bolao", (req, res) => {
           .status(500)
           .send(renderLayout("Erro", "Não foi possível criar o bolão."));
       }
+      logAction("bolao_created", { id, name, drawNumber });
       res.redirect(`/b/${id}?token=${editToken}`);
     }
   );
@@ -719,6 +730,23 @@ app.get("/b/:id", async (req, res) => {
             return res
               .status(500)
               .send(renderLayout("Erro", "Falha ao carregar jogos."));
+          }
+          let subscribers = [];
+          if (authorized) {
+            try {
+              subscribers = await dbAll(
+                `SELECT email, status, created_at, verified_at
+                 FROM bolao_subscribers
+                 WHERE bolao_id = ?
+                 ORDER BY created_at DESC`,
+                [id]
+              );
+            } catch (err) {
+              console.error("Falha ao carregar assinantes:", err);
+              return res
+                .status(500)
+                .send(renderLayout("Erro", "Falha ao carregar assinantes."));
+            }
           }
           const draw = await getDraw(bolao.draw_number);
           const drawNumbers = draw ? new Set(draw.numbers) : null;
@@ -846,6 +874,61 @@ app.get("/b/:id", async (req, res) => {
               </div>
             </div>
           `;
+          const subscribersCard = authorized
+            ? `
+                <div class="card shadow-sm mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Assinantes</h2>
+                    <ul class="list-group list-group-flush">
+                      ${
+                        subscribers.length
+                          ? subscribers
+                              .map((subscriber) => {
+                                const statusLabel =
+                                  subscriber.status === "verified"
+                                    ? "Confirmado"
+                                    : "Pendente";
+                                const statusClass =
+                                  subscriber.status === "verified"
+                                    ? "bg-success"
+                                    : "bg-warning text-dark";
+                                const createdAtLabel = new Date(
+                                  subscriber.created_at
+                                ).toLocaleString("pt-BR");
+                                const verifiedAtLabel = subscriber.verified_at
+                                  ? new Date(
+                                      subscriber.verified_at
+                                    ).toLocaleString("pt-BR")
+                                  : null;
+                                return `<li class="list-group-item d-flex justify-content-between align-items-start flex-wrap gap-2">
+                                  <div>
+                                    <div class="fw-semibold">${escapeHtml(
+                                      subscriber.email
+                                    )}</div>
+                                    <div class="text-muted small">Inscrito em ${escapeHtml(
+                                      createdAtLabel
+                                    )}</div>
+                                    ${
+                                      verifiedAtLabel
+                                        ? `<div class="text-muted small">Confirmado em ${escapeHtml(
+                                            verifiedAtLabel
+                                          )}</div>`
+                                        : ""
+                                    }
+                                  </div>
+                                  <span class="badge ${statusClass}">${escapeHtml(
+                                  statusLabel
+                                )}</span>
+                                </li>`;
+                              })
+                              .join("")
+                          : `<li class="list-group-item text-muted">Nenhum assinante ainda.</li>`
+                      }
+                    </ul>
+                  </div>
+                </div>
+              `
+            : "";
 
           const body = `
             <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-4">
@@ -862,12 +945,14 @@ app.get("/b/:id", async (req, res) => {
               </div>
               <div class="share-panel w-100 w-lg-auto">
                 <small class="text-muted">Link para compartilhar</small>
-                <code class="link-box d-block mt-2">${escapeHtml(shareLink)}</code>
+                <a class="link-box d-block mt-2" href="${escapeHtml(
+                  shareLink
+                )}">${escapeHtml(shareLink)}</a>
                 ${
                   authorized
-                    ? `<div class="mt-3"><small class="text-muted">Link do administrador</small><code class="link-box d-block mt-2">${escapeHtml(
+                    ? `<div class="mt-3"><small class="text-muted">Link do administrador</small><a class="link-box d-block mt-2" href="${escapeHtml(
                         adminLink
-                      )}</code></div>`
+                      )}">${escapeHtml(adminLink)}</a></div>`
                     : ""
                 }
               </div>
@@ -878,6 +963,7 @@ app.get("/b/:id", async (req, res) => {
                 ${addGameCard}
                 ${editNameCard}
                 ${subscribeCard}
+                ${subscribersCard}
               </div>
               <div class="col-lg-8">
                 <div class="card shadow-sm">
@@ -942,6 +1028,7 @@ app.post("/b/:id/subscribe", async (req, res) => {
       text,
       html,
     });
+    logAction("subscription_requested", { bolaoId: id, email });
     res.redirect(`/b/${id}?subscribe=sent`);
   } catch (err) {
     console.error("Falha ao cadastrar assinatura:", err);
@@ -978,6 +1065,7 @@ app.get("/b/:id/confirm", async (req, res) => {
        WHERE id = ?`,
       [new Date().toISOString(), subscriber.id]
     );
+    logAction("subscription_confirmed", { bolaoId: id, subscriberId: subscriber.id });
     res.redirect(`/b/${id}?confirm=ok`);
   } catch (err) {
     console.error("Falha ao confirmar assinatura:", err);
@@ -1021,6 +1109,7 @@ app.post("/b/:id/update", (req, res) => {
               .status(500)
               .send(renderLayout("Erro", "Não foi possível atualizar o bolão."));
           }
+          logAction("bolao_name_updated", { id, name });
           res.redirect(`/b/${id}?token=${bolao.edit_token}`);
         }
       );
@@ -1071,6 +1160,7 @@ app.post("/b/:id/games", (req, res) => {
               .status(500)
               .send(renderLayout("Erro", "Não foi possível salvar o jogo."));
           }
+          logAction("game_added", { bolaoId: id, numbers });
           res.redirect(`/b/${id}?token=${bolao.edit_token}`);
         }
       );
@@ -1109,9 +1199,11 @@ app.get("/admin", requireAdmin, (req, res) => {
                   <small class="text-muted">Concurso ${escapeHtml(
                     bolao.draw_number
                   )}</small><br />
-                  <small class="text-muted text-break d-block">Link: ${escapeHtml(
-                    shareLink
-                  )}</small>
+                  <small class="text-muted text-break d-block">
+                    Link: <a href="${escapeHtml(shareLink)}">${escapeHtml(
+                      shareLink
+                    )}</a>
+                  </small>
                 </div>
                 <div class="d-flex gap-2">
                   <a class="btn btn-sm btn-outline-primary" href="/admin/boloes/${encodeURIComponent(
@@ -1195,29 +1287,83 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
               .status(500)
               .send(renderLayout("Admin", "Falha ao carregar jogos."));
           }
-          const shareLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
-            bolao.id
-          )}`;
-          const adminLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
-            bolao.id
-          )}?token=${encodeURIComponent(bolao.edit_token)}`;
-          const bolaoTitle = getBolaoDisplayName(bolao);
-          const bolaoSubtitle =
-            bolaoTitle === `Bolão ${bolao.id}` ? "" : `ID ${bolao.id}`;
-          const gamesHtml = games.length
-            ? games
-                .map((game) => {
-                  const numbers = JSON.parse(game.numbers)
-                    .map((num) => escapeHtml(num))
-                    .join(" ");
-                  return `<li class="list-group-item d-flex justify-content-between align-items-center">
-                    <span>${numbers}</span>
-                  </li>`;
-                })
-                .join("")
-            : `<li class="list-group-item text-muted">Nenhum jogo cadastrado.</li>`;
+          db.all(
+            `SELECT email, status, created_at, verified_at
+             FROM bolao_subscribers
+             WHERE bolao_id = ?
+             ORDER BY created_at DESC`,
+            [id],
+            (errSubscribers, subscribers) => {
+              if (errSubscribers) {
+                return res
+                  .status(500)
+                  .send(renderLayout("Admin", "Falha ao carregar assinantes."));
+              }
+              const shareLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
+                bolao.id
+              )}`;
+              const adminLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
+                bolao.id
+              )}?token=${encodeURIComponent(bolao.edit_token)}`;
+              const bolaoTitle = getBolaoDisplayName(bolao);
+              const bolaoSubtitle =
+                bolaoTitle === `Bolão ${bolao.id}` ? "" : `ID ${bolao.id}`;
+              const gamesHtml = games.length
+                ? games
+                    .map((game) => {
+                      const numbers = JSON.parse(game.numbers)
+                        .map((num) => escapeHtml(num))
+                        .join(" ");
+                      return `<li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span>${numbers}</span>
+                      </li>`;
+                    })
+                    .join("")
+                : `<li class="list-group-item text-muted">Nenhum jogo cadastrado.</li>`;
+              const subscribersHtml = subscribers.length
+                ? subscribers
+                    .map((subscriber) => {
+                      const statusLabel =
+                        subscriber.status === "verified"
+                          ? "Confirmado"
+                          : "Pendente";
+                      const statusClass =
+                        subscriber.status === "verified"
+                          ? "bg-success"
+                          : "bg-warning text-dark";
+                      const createdAtLabel = new Date(
+                        subscriber.created_at
+                      ).toLocaleString("pt-BR");
+                      const verifiedAtLabel = subscriber.verified_at
+                        ? new Date(subscriber.verified_at).toLocaleString(
+                            "pt-BR"
+                          )
+                        : null;
+                      return `<li class="list-group-item d-flex justify-content-between align-items-start flex-wrap gap-2">
+                        <div>
+                          <div class="fw-semibold">${escapeHtml(
+                            subscriber.email
+                          )}</div>
+                          <div class="text-muted small">Inscrito em ${escapeHtml(
+                            createdAtLabel
+                          )}</div>
+                          ${
+                            verifiedAtLabel
+                              ? `<div class="text-muted small">Confirmado em ${escapeHtml(
+                                  verifiedAtLabel
+                                )}</div>`
+                              : ""
+                          }
+                        </div>
+                        <span class="badge ${statusClass}">${escapeHtml(
+                        statusLabel
+                      )}</span>
+                      </li>`;
+                    })
+                    .join("")
+                : `<li class="list-group-item text-muted">Nenhum assinante ainda.</li>`;
 
-          const body = `
+              const body = `
             <div class="d-flex justify-content-between align-items-center mb-3">
               <div>
                 <h1 class="h4">Administração do ${escapeHtml(
@@ -1275,9 +1421,13 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
                   <div class="card-body">
                     <h2 class="h6">Links</h2>
                     <p class="small text-muted mb-2">Compartilhamento:</p>
-                    <code class="small link-box d-block">${escapeHtml(shareLink)}</code>
+                    <a class="small link-box d-block" href="${escapeHtml(
+                      shareLink
+                    )}">${escapeHtml(shareLink)}</a>
                     <p class="small text-muted mt-3 mb-2">Administrador:</p>
-                    <code class="small link-box d-block">${escapeHtml(adminLink)}</code>
+                    <a class="small link-box d-block" href="${escapeHtml(
+                      adminLink
+                    )}">${escapeHtml(adminLink)}</a>
                   </div>
                 </div>
               </div>
@@ -1290,13 +1440,23 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
                     </ul>
                   </div>
                 </div>
+                <div class="card shadow-sm mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Assinantes</h2>
+                    <ul class="list-group list-group-flush">
+                      ${subscribersHtml}
+                    </ul>
+                  </div>
+                </div>
                 <form method="post" action="/admin/boloes/${bolao.id}/delete">
                   <button class="btn btn-danger">Excluir bolão</button>
                 </form>
               </div>
             </div>
           `;
-          res.send(renderLayout("Admin", body));
+              res.send(renderLayout("Admin", body));
+            }
+          );
         }
       );
     }
@@ -1331,6 +1491,7 @@ app.post("/admin/boloes/:id/update", requireAdmin, (req, res) => {
           .status(500)
           .send(renderLayout("Admin", "Falha ao atualizar bolão."));
       }
+      logAction("bolao_updated_by_admin", { id, name, drawNumber });
       res.redirect(`/admin/boloes/${id}`);
     }
   );
@@ -1365,6 +1526,7 @@ app.post("/admin/boloes/:id/games", requireAdmin, (req, res) => {
           .status(500)
           .send(renderLayout("Admin", "Não foi possível salvar o jogo."));
       }
+      logAction("game_added_by_admin", { bolaoId: id, numbers });
       res.redirect(`/admin/boloes/${id}`);
     }
   );
@@ -1390,6 +1552,7 @@ app.post("/admin/boloes/:id/delete", requireAdmin, (req, res) => {
             .status(500)
             .send(renderLayout("Admin", "Falha ao excluir bolão."));
         }
+        logAction("bolao_deleted_by_admin", { id });
         res.redirect("/admin");
       });
     });
