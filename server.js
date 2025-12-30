@@ -63,6 +63,7 @@ app.use(
     },
   })
 );
+app.use(express.static(path.join(__dirname, "public")));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
@@ -222,6 +223,7 @@ function renderLayout(title, body, extraHead = "") {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>${escapeHtml(title)}</title>
+    <link rel="icon" href="/favico.ico" type="image/x-icon">
     ${extraHead}
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
@@ -827,6 +829,7 @@ app.get("/b/:id", async (req, res) => {
           const ogDescription = draw
             ? `${bolaoTitle} • Concurso ${draw.number} (${draw.drawDate})`
             : `${bolaoTitle} • Concurso ${bolao.draw_number}`;
+          const ogImage = `${SHARE_BASE_URL}/bolao.png`;
           const ogTags = `
             <meta property="og:type" content="website" />
             <meta property="og:title" content="${escapeHtml(ogTitle)}" />
@@ -834,6 +837,8 @@ app.get("/b/:id", async (req, res) => {
               ogDescription
             )}" />
             <meta property="og:url" content="${escapeHtml(shareLink)}" />
+            <meta property="og:image" content="${escapeHtml(ogImage)}" />
+            <meta property="og:image:alt" content="Bolão Mega-Sena" />
           `;
           const addGameCard = authorized
             ? `
