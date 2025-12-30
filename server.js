@@ -1,3 +1,5 @@
+process.env.TZ = "America/Sao_Paulo";
+
 const crypto = require("crypto");
 const express = require("express");
 const fs = require("fs");
@@ -578,6 +580,30 @@ function fetchLatestDraw() {
     });
 }
 
+function parseBrazilDate(value) {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const [, day, month, year] = match.map(Number);
+  const date = new Date(year, month - 1, day, 23, 59, 59, 999);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function fetchLatestDrawSummary() {
+  return fetch(API_URL)
+    .then((res) => res.json())
+    .then((data) => {
+      if (!data || !data.numero || !data.numeroConcursoProximo) {
+        throw new Error("Resposta inválida da API");
+      }
+      return {
+        latestNumber: data.numero,
+        latestDrawDate: data.dataApuracao,
+        nextNumber: data.numeroConcursoProximo,
+        nextDrawDate: data.dataProximoConcurso,
+      };
+    });
+}
+
 function storeDraw(draw) {
   const now = new Date().toISOString();
   return dbRun(
@@ -696,7 +722,18 @@ async function notifySubscribersForDraw(draw) {
   }
 }
 
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
+  let nextDrawNumber = "";
+  let nextDrawLabel = "";
+  try {
+    const summary = await fetchLatestDrawSummary();
+    nextDrawNumber = summary.nextNumber;
+    nextDrawLabel = summary.nextDrawDate
+      ? `Próximo concurso em ${summary.nextDrawDate}`
+      : "";
+  } catch (err) {
+    console.error("Falha ao carregar próximo concurso:", err);
+  }
   const body = `
     <div class="row">
       <div class="col-lg-8">
@@ -712,7 +749,14 @@ app.get("/", (req, res) => {
               </div>
               <div class="mb-3">
                 <label class="form-label">Número do concurso</label>
-                <input class="form-control" name="drawNumber" type="number" min="1" max="9999" step="1" inputmode="numeric" required />
+                <input class="form-control" name="drawNumber" type="number" min="1" max="9999" step="1" inputmode="numeric" value="${escapeHtml(
+                  nextDrawNumber
+                )}" required />
+                ${
+                  nextDrawLabel
+                    ? `<div class="form-text">${escapeHtml(nextDrawLabel)}</div>`
+                    : ""
+                }
               </div>
               <button class="btn btn-primary w-100">Criar bolão</button>
             </form>
@@ -737,7 +781,7 @@ app.get("/", (req, res) => {
   res.send(renderLayout("Bolão Mega-Sena", body));
 });
 
-app.post("/bolao", (req, res) => {
+app.post("/bolao", async (req, res) => {
   const { drawNumber, error } = parseDrawNumber(req.body.drawNumber);
   if (error) {
     return res
@@ -749,6 +793,37 @@ app.post("/bolao", (req, res) => {
     return res
       .status(400)
       .send(renderLayout("Erro", escapeHtml(nameError)));
+  }
+  try {
+    const summary = await fetchLatestDrawSummary();
+    const now = new Date();
+    const nextDrawDate = parseBrazilDate(summary.nextDrawDate);
+    if (drawNumber <= summary.latestNumber) {
+      return res
+        .status(400)
+        .send(
+          renderLayout(
+            "Erro",
+            "Este concurso já foi sorteado. Escolha um concurso futuro."
+          )
+        );
+    }
+    if (
+      drawNumber === summary.nextNumber &&
+      nextDrawDate &&
+      now > nextDrawDate
+    ) {
+      return res
+        .status(400)
+        .send(
+          renderLayout(
+            "Erro",
+            "O próximo concurso já foi sorteado. Aguarde o próximo número."
+          )
+        );
+    }
+  } catch (err) {
+    console.error("Falha ao validar concurso:", err);
   }
   const id = generateBolaoId();
   const editToken = crypto.randomBytes(16).toString("hex");
