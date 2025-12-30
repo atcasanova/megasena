@@ -317,6 +317,51 @@ function parseNumbers(input) {
   };
 }
 
+function parseGamesInput(input) {
+  const lines = input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (!lines.length) {
+    return { error: "Informe ao menos um jogo." };
+  }
+
+  const games = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const { numbers, error } = parseNumbers(lines[index]);
+    if (error) {
+      return { error: `Linha ${index + 1}: ${error}` };
+    }
+    games.push(numbers);
+  }
+
+  return { games };
+}
+
+function insertGames(bolaoId, games, onComplete) {
+  const createdAt = new Date().toISOString();
+  db.serialize(() => {
+    db.run("BEGIN TRANSACTION");
+    const insertNext = (index) => {
+      if (index >= games.length) {
+        return db.run("COMMIT", onComplete);
+      }
+      db.run(
+        "INSERT INTO games (bolao_id, numbers, created_at) VALUES (?, ?, ?)",
+        [bolaoId, JSON.stringify(games[index]), createdAt],
+        (err) => {
+          if (err) {
+            return db.run("ROLLBACK", () => onComplete(err));
+          }
+          return insertNext(index + 1);
+        }
+      );
+    };
+    insertNext(0);
+  });
+}
+
 function parseResultNumbers(input) {
   const { numbers, error } = parseNumbers(input);
   if (error) {
@@ -844,14 +889,14 @@ app.get("/b/:id", async (req, res) => {
             ? `
                 <div class="card shadow-sm mb-4">
                   <div class="card-body">
-                    <h2 class="h6">Adicionar jogo</h2>
+                    <h2 class="h6">Adicionar jogos</h2>
                     <form method="post" action="/b/${id}/games">
                       <div class="mb-3">
-                        <label class="form-label">Dezenas (6 a 15)</label>
-                        <input class="form-control" name="numbers" placeholder="Ex: 01 05 12 23 34 45" pattern="^\\s*\\d{1,2}(?:\\s*[ ,;-]\\s*\\d{1,2})*\\s*$" inputmode="numeric" required />
-                        <div class="form-text">Separe por espaço, vírgula ou ponto-e-vírgula.</div>
+                        <label class="form-label">Jogos (1 por linha)</label>
+                        <textarea class="form-control" name="numbers" rows="4" placeholder="01 05 12 23 34 45&#10;02 08 14 29 37 50" inputmode="numeric" required></textarea>
+                        <div class="form-text">Informe de 6 a 15 dezenas por linha, separadas por espaço, vírgula ou ponto-e-vírgula.</div>
                       </div>
-                      <button class="btn btn-primary w-100">Salvar jogo</button>
+                      <button class="btn btn-primary w-100">Salvar jogos</button>
                     </form>
                   </div>
                 </div>
@@ -1172,7 +1217,7 @@ app.post("/b/:id/games", (req, res) => {
           .status(403)
           .send(renderLayout("Erro", "Apenas o criador do bolão pode cadastrar jogos."));
       }
-      const { numbers, error } = parseNumbers(String(req.body.numbers || ""));
+      const { games, error } = parseGamesInput(String(req.body.numbers || ""));
       if (error) {
         return res
           .status(400)
@@ -1185,19 +1230,15 @@ app.post("/b/:id/games", (req, res) => {
             )
           );
       }
-      db.run(
-        "INSERT INTO games (bolao_id, numbers, created_at) VALUES (?, ?, ?)",
-        [id, JSON.stringify(numbers), new Date().toISOString()],
-        (errInsert) => {
-          if (errInsert) {
-            return res
-              .status(500)
-              .send(renderLayout("Erro", "Não foi possível salvar o jogo."));
-          }
-          logAction("game_added", { bolaoId: id, numbers });
-          res.redirect(`/b/${id}?token=${bolao.edit_token}`);
+      insertGames(id, games, (errInsert) => {
+        if (errInsert) {
+          return res
+            .status(500)
+            .send(renderLayout("Erro", "Não foi possível salvar os jogos."));
         }
-      );
+        logAction("games_added", { bolaoId: id, count: games.length });
+        res.redirect(`/b/${id}?token=${bolao.edit_token}`);
+      });
     }
   );
 });
@@ -1581,13 +1622,14 @@ app.get("/admin/boloes/:id", requireAdmin, (req, res) => {
                 </div>
                 <div class="card shadow-sm mb-4">
                   <div class="card-body">
-                    <h2 class="h6">Adicionar jogo</h2>
+                    <h2 class="h6">Adicionar jogos</h2>
                     <form method="post" action="/admin/boloes/${bolao.id}/games">
                       <div class="mb-3">
-                        <label class="form-label">Dezenas (6 a 15)</label>
-                        <input class="form-control" name="numbers" placeholder="Ex: 01 05 12 23 34 45" pattern="^\\s*\\d{1,2}(?:\\s*[ ,;-]\\s*\\d{1,2})*\\s*$" inputmode="numeric" required />
+                        <label class="form-label">Jogos (1 por linha)</label>
+                        <textarea class="form-control" name="numbers" rows="4" placeholder="01 05 12 23 34 45&#10;02 08 14 29 37 50" inputmode="numeric" required></textarea>
+                        <div class="form-text">Informe de 6 a 15 dezenas por linha, separadas por espaço, vírgula ou ponto-e-vírgula.</div>
                       </div>
-                      <button class="btn btn-outline-primary w-100">Salvar jogo</button>
+                      <button class="btn btn-outline-primary w-100">Salvar jogos</button>
                     </form>
                   </div>
                 </div>
@@ -1678,7 +1720,7 @@ app.post("/admin/boloes/:id/games", requireAdmin, (req, res) => {
       .status(404)
       .send(renderLayout("Admin", "Bolão não encontrado."));
   }
-  const { numbers, error } = parseNumbers(String(req.body.numbers || ""));
+  const { games, error } = parseGamesInput(String(req.body.numbers || ""));
   if (error) {
     return res
       .status(400)
@@ -1691,19 +1733,15 @@ app.post("/admin/boloes/:id/games", requireAdmin, (req, res) => {
         )
       );
   }
-  db.run(
-    "INSERT INTO games (bolao_id, numbers, created_at) VALUES (?, ?, ?)",
-    [id, JSON.stringify(numbers), new Date().toISOString()],
-    (err) => {
-      if (err) {
-        return res
-          .status(500)
-          .send(renderLayout("Admin", "Não foi possível salvar o jogo."));
-      }
-      logAction("game_added_by_admin", { bolaoId: id, numbers });
-      res.redirect(`/admin/boloes/${id}`);
+  insertGames(id, games, (err) => {
+    if (err) {
+      return res
+        .status(500)
+        .send(renderLayout("Admin", "Não foi possível salvar os jogos."));
     }
-  );
+    logAction("games_added_by_admin", { bolaoId: id, count: games.length });
+    res.redirect(`/admin/boloes/${id}`);
+  });
 });
 
 app.post("/admin/boloes/:id/delete", requireAdmin, (req, res) => {
