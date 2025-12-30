@@ -592,10 +592,11 @@ async function notifySubscribersForDraw(draw) {
 
       for (const subscriber of subscribers) {
         try {
+          const bolaoTitle = getBolaoDisplayName(bolao);
           await mailTransport.sendMail({
             from: `"Bolão ${bolao.id}" <bolao-${bolao.id}@${FROM_DOMAIN}>`,
             to: subscriber.email,
-            subject: "Resultados do seu bolão",
+            subject: `Resultados do seu ${bolaoTitle}`,
             text: emailText,
             html: emailHtml,
           });
@@ -1021,10 +1022,11 @@ app.post("/b/:id/subscribe", async (req, res) => {
       bolao,
       token,
     });
+    const bolaoTitle = getBolaoDisplayName(bolao);
     await mailTransport.sendMail({
       from: `"Bolão ${id}" <bolao-${id}@${FROM_DOMAIN}>`,
       to: email,
-      subject: "Confirme seu email",
+      subject: `Confirme seu email para acompanhar o ${bolaoTitle}`,
       text,
       html,
     });
