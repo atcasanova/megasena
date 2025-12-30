@@ -1199,61 +1199,102 @@ app.post("/b/:id/games", (req, res) => {
 
 app.get("/admin", requireAdmin, (req, res) => {
   db.all(
-    "SELECT id, name, draw_number, created_at FROM boloes ORDER BY created_at DESC",
-    (err, boloes) => {
-      if (err) {
+    "SELECT number, draw_date, updated_at FROM draws ORDER BY number DESC",
+    (errDraws, draws) => {
+      if (errDraws) {
         return res
           .status(500)
-          .send(renderLayout("Admin", "Falha ao carregar bolões."));
+          .send(renderLayout("Admin", "Falha ao carregar sorteios."));
       }
-      const list = boloes.length
-          ? boloes
-            .map((bolao) => {
-              const shareLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
-                bolao.id
-              )}`;
-              const title = getBolaoDisplayName(bolao);
-              const subtitle =
-                title === `Bolão ${bolao.id}` ? "" : `ID ${bolao.id}`;
-              return `<li class="list-group-item d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
-                <div>
-                  <strong>${escapeHtml(title)}</strong><br />
-                  ${
-                    subtitle
-                      ? `<small class="text-muted">${escapeHtml(
-                          subtitle
-                        )}</small><br />`
-                      : ""
-                  }
-                  <small class="text-muted">Concurso ${escapeHtml(
-                    bolao.draw_number
-                  )}</small><br />
-                  <small class="text-muted text-break d-block">
-                    Link: <a href="${escapeHtml(shareLink)}">${escapeHtml(
-                      shareLink
-                    )}</a>
-                  </small>
-                </div>
-                <div class="d-flex gap-2">
-                  <a class="btn btn-sm btn-outline-primary" href="/admin/boloes/${encodeURIComponent(
+      db.all(
+        "SELECT id, name, draw_number, created_at FROM boloes ORDER BY created_at DESC",
+        (err, boloes) => {
+          if (err) {
+            return res
+              .status(500)
+              .send(renderLayout("Admin", "Falha ao carregar bolões."));
+          }
+          const list = boloes.length
+              ? boloes
+                .map((bolao) => {
+                  const shareLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
                     bolao.id
-                  )}">Editar</a>
-                  <form method="post" action="/admin/boloes/${encodeURIComponent(
-                    bolao.id
-                  )}/delete">
-                    <button class="btn btn-sm btn-outline-danger">Excluir</button>
-                  </form>
-                </div>
-              </li>`;
-            })
-            .join("")
-        : `<li class="list-group-item text-muted">Nenhum bolão cadastrado.</li>`;
+                  )}`;
+                  const title = getBolaoDisplayName(bolao);
+                  const subtitle =
+                    title === `Bolão ${bolao.id}` ? "" : `ID ${bolao.id}`;
+                  return `<li class="list-group-item d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                    <div>
+                      <strong>${escapeHtml(title)}</strong><br />
+                      ${
+                        subtitle
+                          ? `<small class="text-muted">${escapeHtml(
+                              subtitle
+                            )}</small><br />`
+                          : ""
+                      }
+                      <small class="text-muted">Concurso ${escapeHtml(
+                        bolao.draw_number
+                      )}</small><br />
+                      <small class="text-muted text-break d-block">
+                        Link: <a href="${escapeHtml(shareLink)}">${escapeHtml(
+                          shareLink
+                        )}</a>
+                      </small>
+                    </div>
+                    <div class="d-flex gap-2">
+                      <a class="btn btn-sm btn-outline-primary" href="/admin/boloes/${encodeURIComponent(
+                        bolao.id
+                      )}">Editar</a>
+                      <form method="post" action="/admin/boloes/${encodeURIComponent(
+                        bolao.id
+                      )}/delete">
+                        <button class="btn btn-sm btn-outline-danger">Excluir</button>
+                      </form>
+                    </div>
+                  </li>`;
+                })
+                .join("")
+            : `<li class="list-group-item text-muted">Nenhum bolão cadastrado.</li>`;
+          const drawsList = draws.length
+            ? draws
+                .map((draw) => {
+                  const updatedAtLabel = draw.updated_at
+                    ? new Date(draw.updated_at).toLocaleString("pt-BR")
+                    : "";
+                  return `<li class="list-group-item d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                    <div>
+                      <strong>Concurso ${escapeHtml(draw.number)}</strong><br />
+                      <small class="text-muted">Apuração ${escapeHtml(
+                        draw.draw_date
+                      )}</small>
+                      ${
+                        updatedAtLabel
+                          ? `<br /><small class="text-muted">Atualizado em ${escapeHtml(
+                              updatedAtLabel
+                            )}</small>`
+                          : ""
+                      }
+                    </div>
+                    <form method="post" action="/admin/draws/${encodeURIComponent(
+                      draw.number
+                    )}/delete">
+                      <button class="btn btn-sm btn-outline-danger">Excluir</button>
+                    </form>
+                  </li>`;
+                })
+                .join("")
+            : `<li class="list-group-item text-muted">Nenhum sorteio cadastrado.</li>`;
 
-      const manualNotice =
-        req.query.manual === "ok"
-          ? `<div class="alert alert-success">Resultado informado com sucesso.</div>`
-          : "";
-      const body = `
+          const manualNotice =
+            req.query.manual === "ok"
+              ? `<div class="alert alert-success">Resultado informado com sucesso.</div>`
+              : "";
+          const drawDeleteNotice =
+            req.query.drawDeleted === "ok"
+              ? `<div class="alert alert-success">Sorteio excluído com sucesso.</div>`
+              : "";
+          const body = `
         <div class="d-flex justify-content-between align-items-center mb-3">
           <div>
             <h1 class="h4">Área administrativa</h1>
@@ -1261,6 +1302,7 @@ app.get("/admin", requireAdmin, (req, res) => {
           </div>
         </div>
         ${manualNotice}
+        ${drawDeleteNotice}
         <div class="card shadow-sm mb-4">
           <div class="card-body">
             <h2 class="h6">Informar sorteio manualmente</h2>
@@ -1278,6 +1320,14 @@ app.get("/admin", requireAdmin, (req, res) => {
             </form>
           </div>
         </div>
+        <div class="card shadow-sm mb-4">
+          <div class="card-body">
+            <h2 class="h6">Sorteios realizados</h2>
+            <ul class="list-group list-group-flush">
+              ${drawsList}
+            </ul>
+          </div>
+        </div>
         <div class="card shadow-sm">
           <div class="card-body">
             <ul class="list-group list-group-flush">
@@ -1286,7 +1336,9 @@ app.get("/admin", requireAdmin, (req, res) => {
           </div>
         </div>
       `;
-      res.send(renderLayout("Admin", body));
+          res.send(renderLayout("Admin", body));
+        }
+      );
     }
   );
 });
@@ -1326,6 +1378,35 @@ app.post("/admin/draws/manual", requireAdmin, async (req, res) => {
       .status(500)
       .send(renderLayout("Admin", "Falha ao salvar o sorteio."));
   }
+});
+
+app.post("/admin/draws/:number/delete", requireAdmin, (req, res) => {
+  const { drawNumber, error } = parseDrawNumber(req.params.number);
+  if (error) {
+    return res.status(400).send(renderLayout("Admin", escapeHtml(error)));
+  }
+  db.serialize(() => {
+    db.run(
+      "UPDATE bolao_subscribers SET last_notified_draw = NULL WHERE last_notified_draw = ?",
+      [drawNumber],
+      (errReset) => {
+        if (errReset) {
+          return res
+            .status(500)
+            .send(renderLayout("Admin", "Falha ao atualizar assinantes."));
+        }
+        db.run("DELETE FROM draws WHERE number = ?", [drawNumber], (errDelete) => {
+          if (errDelete) {
+            return res
+              .status(500)
+              .send(renderLayout("Admin", "Falha ao excluir sorteio."));
+          }
+          logAction("draw_deleted_by_admin", { drawNumber });
+          res.redirect("/admin?drawDeleted=ok");
+        });
+      }
+    );
+  });
 });
 
 app.post("/admin/email/test", requireAdmin, async (req, res) => {
