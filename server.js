@@ -880,7 +880,7 @@ app.get("/b/:id", async (req, res) => {
             : "";
           const subscribeNotice =
             req.query.subscribe === "sent"
-              ? `<div class="alert alert-success">Enviamos um email com o link de confirmação.</div>`
+              ? `<div class="alert alert-success">Enviamos um email com o link de confirmação. Verifique também a pasta de SPAM caso não encontre.</div>`
               : req.query.confirm === "ok"
               ? `<div class="alert alert-success">Email confirmado! Você receberá os resultados deste bolão.</div>`
               : req.query.confirm === "invalid"
