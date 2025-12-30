@@ -1329,11 +1329,29 @@ app.get("/admin", requireAdmin, (req, res) => {
       }
       db.all(
         "SELECT id, name, draw_number, created_at FROM boloes ORDER BY created_at DESC",
-        (err, boloes) => {
+        async (err, boloes) => {
           if (err) {
             return res
               .status(500)
               .send(renderLayout("Admin", "Falha ao carregar bolões."));
+          }
+          let suggestedDrawNumber = "";
+          let suggestedDrawLabel = "";
+          const latestDrawNumber = draws.length ? Number(draws[0].number) : null;
+          if (Number.isInteger(latestDrawNumber)) {
+            suggestedDrawNumber = latestDrawNumber + 1;
+          }
+          try {
+            const summary = await fetchLatestDrawSummary();
+            suggestedDrawNumber = summary.nextNumber;
+            suggestedDrawLabel = summary.nextDrawDate
+              ? `sorteio em ${summary.nextDrawDate}`
+              : "";
+          } catch (errSummary) {
+            console.error(
+              "Falha ao carregar próximo concurso para o admin:",
+              errSummary
+            );
           }
           const list = boloes.length
               ? boloes
@@ -1430,7 +1448,16 @@ app.get("/admin", requireAdmin, (req, res) => {
             <form method="post" action="/admin/draws/manual">
               <div class="mb-3">
                 <label class="form-label">Número do concurso</label>
-                <input class="form-control" name="drawNumber" type="number" min="1" max="9999" step="1" inputmode="numeric" required />
+                <input class="form-control" name="drawNumber" type="number" min="1" max="9999" step="1" inputmode="numeric" value="${escapeHtml(
+                  suggestedDrawNumber
+                )}" required />
+                ${
+                  suggestedDrawLabel
+                    ? `<div class="form-text">${escapeHtml(
+                        suggestedDrawLabel
+                      )}</div>`
+                    : ""
+                }
               </div>
               <div class="mb-3">
                 <label class="form-label">Dezenas sorteadas</label>
