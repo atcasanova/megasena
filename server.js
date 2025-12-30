@@ -315,6 +315,17 @@ function parseNumbers(input) {
   };
 }
 
+function parseResultNumbers(input) {
+  const { numbers, error } = parseNumbers(input);
+  if (error) {
+    return { error };
+  }
+  if (numbers.length !== 6) {
+    return { error: "Informe exatamente 6 dezenas." };
+  }
+  return { numbers };
+}
+
 function parseDrawNumber(input) {
   const drawNumber = Number(input);
   if (!Number.isInteger(drawNumber) || drawNumber < 1 || drawNumber > 9999) {
@@ -533,14 +544,30 @@ function storeDraw(draw) {
   );
 }
 
+async function hasPendingBoloes() {
+  const row = await dbGet(
+    `SELECT 1
+     FROM boloes
+     LEFT JOIN draws ON boloes.draw_number = draws.number
+     WHERE draws.number IS NULL
+     LIMIT 1`
+  );
+  return Boolean(row);
+}
+
 function startPolling() {
-  const poll = () => {
-    fetchLatestDraw()
-      .then(async (draw) => {
-        await storeDraw(draw);
-        await notifySubscribersForDraw(draw);
-      })
-      .catch((err) => console.error("Falha ao buscar concurso:", err));
+  const poll = async () => {
+    try {
+      const pending = await hasPendingBoloes();
+      if (!pending) {
+        return;
+      }
+      const draw = await fetchLatestDraw();
+      await storeDraw(draw);
+      await notifySubscribersForDraw(draw);
+    } catch (err) {
+      console.error("Falha ao buscar concurso:", err);
+    }
   };
   poll();
   setInterval(poll, POLL_INTERVAL_MS);
@@ -1222,11 +1249,33 @@ app.get("/admin", requireAdmin, (req, res) => {
             .join("")
         : `<li class="list-group-item text-muted">Nenhum bolão cadastrado.</li>`;
 
+      const manualNotice =
+        req.query.manual === "ok"
+          ? `<div class="alert alert-success">Resultado informado com sucesso.</div>`
+          : "";
       const body = `
         <div class="d-flex justify-content-between align-items-center mb-3">
           <div>
             <h1 class="h4">Área administrativa</h1>
             <p class="text-muted mb-0">Gerencie todos os bolões cadastrados.</p>
+          </div>
+        </div>
+        ${manualNotice}
+        <div class="card shadow-sm mb-4">
+          <div class="card-body">
+            <h2 class="h6">Informar sorteio manualmente</h2>
+            <form method="post" action="/admin/draws/manual">
+              <div class="mb-3">
+                <label class="form-label">Número do concurso</label>
+                <input class="form-control" name="drawNumber" type="number" min="1" max="9999" step="1" inputmode="numeric" required />
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Dezenas sorteadas</label>
+                <input class="form-control" name="numbers" placeholder="Ex: 01 05 12 23 34 45" pattern="^\\s*\\d{1,2}(?:\\s*[ ,;-]\\s*\\d{1,2}){5}\\s*$" inputmode="numeric" required />
+                <div class="form-text">Informe exatamente 6 dezenas.</div>
+              </div>
+              <button class="btn btn-outline-primary">Salvar resultado</button>
+            </form>
           </div>
         </div>
         <div class="card shadow-sm">
@@ -1240,6 +1289,43 @@ app.get("/admin", requireAdmin, (req, res) => {
       res.send(renderLayout("Admin", body));
     }
   );
+});
+
+app.post("/admin/draws/manual", requireAdmin, async (req, res) => {
+  const { drawNumber, error } = parseDrawNumber(req.body.drawNumber);
+  if (error) {
+    return res
+      .status(400)
+      .send(renderLayout("Admin", escapeHtml(error)));
+  }
+  const { numbers, error: numbersError } = parseResultNumbers(
+    String(req.body.numbers || "")
+  );
+  if (numbersError) {
+    return res
+      .status(400)
+      .send(renderLayout("Admin", escapeHtml(numbersError)));
+  }
+  const drawDate = new Date().toLocaleDateString("pt-BR");
+  try {
+    await storeDraw({
+      number: drawNumber,
+      numbers,
+      drawDate,
+    });
+    await notifySubscribersForDraw({
+      number: drawNumber,
+      numbers,
+      drawDate,
+    });
+    logAction("draw_manual_added", { drawNumber, numbers });
+    res.redirect("/admin?manual=ok");
+  } catch (err) {
+    console.error("Falha ao salvar sorteio manual:", err);
+    res
+      .status(500)
+      .send(renderLayout("Admin", "Falha ao salvar o sorteio."));
+  }
 });
 
 app.post("/admin/email/test", requireAdmin, async (req, res) => {
