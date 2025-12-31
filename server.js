@@ -218,6 +218,68 @@ function getBolaoDisplayName(bolao) {
   return `Bolão ${bolao.id}`;
 }
 
+function getGameStats(games, drawNumbersSet) {
+  return games.map((game) => {
+    const numbers = JSON.parse(game.numbers);
+    const hitCount = drawNumbersSet
+      ? numbers.filter((num) => drawNumbersSet.has(num)).length
+      : 0;
+    return {
+      game,
+      numbers,
+      hitCount,
+      size: numbers.length,
+    };
+  });
+}
+
+function sortGameStats(stats, hasDraw) {
+  return [...stats].sort((a, b) => {
+    if (hasDraw && b.hitCount !== a.hitCount) {
+      return b.hitCount - a.hitCount;
+    }
+    if (b.size !== a.size) {
+      return b.size - a.size;
+    }
+    return b.game.id - a.game.id;
+  });
+}
+
+function getMaxHits(stats) {
+  return stats.reduce((max, game) => Math.max(max, game.hitCount), 0);
+}
+
+function getHitAchievement(hitCount) {
+  if (hitCount === 6) {
+    return {
+      label: "sena",
+      title: "Você acertou a sena!",
+      emoji: "🏆",
+      highlight: "background:#ecfdf3;border:2px solid #22c55e;",
+      emphasis: "font-size:16px;font-weight:700;",
+    };
+  }
+  if (hitCount === 5) {
+    return {
+      label: "quina",
+      title: "Você acertou a quina!",
+      emoji: "🥳",
+      highlight: "background:#fef9c3;border:2px solid #eab308;",
+      emphasis: "font-size:15px;font-weight:700;",
+    };
+  }
+  if (hitCount === 4) {
+    return {
+      label: "quadra",
+      title: "Você acertou a quadra!",
+      emoji: "🎉",
+      highlight: "background:#fffbeb;border:2px solid #f59e0b;",
+      emphasis: "font-size:14px;font-weight:600;",
+    };
+  }
+  return null;
+}
+
 function renderLayout(title, body, extraHead = "") {
   return `<!doctype html>
 <html lang="pt-BR">
@@ -414,22 +476,23 @@ function dbRun(sql, params = []) {
   });
 }
 
-function buildResultsEmailHtml({ bolao, draw, games }) {
+function buildResultsEmailHtml({ bolao, draw, gamesStats, maxHits }) {
   const bolaoTitle = getBolaoDisplayName(bolao);
   const bolaoSubtitle = bolaoTitle === `Bolão ${bolao.id}` ? "" : bolao.id;
   const drawNumbers = new Set(draw.numbers);
-  const gamesHtml = games.length
-    ? games
+  const achievement = getHitAchievement(maxHits);
+  const sortedGames = sortGameStats(gamesStats, true);
+  const gamesHtml = sortedGames.length
+    ? sortedGames
         .map((game) => {
-          const numbers = JSON.parse(game.numbers);
-          const hits = numbers.filter((num) => drawNumbers.has(num));
+          const hits = game.numbers.filter((num) => drawNumbers.has(num));
           const hitLabel =
             hits.length >= 6
               ? "🎉 Premiado!"
               : hits.length >= 4
               ? "Boa!"
               : "Confira";
-          const numberBadges = numbers
+          const numberBadges = game.numbers
             .map((num) => {
               const active = drawNumbers.has(num);
               const style = active
@@ -440,11 +503,18 @@ function buildResultsEmailHtml({ bolao, draw, games }) {
               )}</span>`;
             })
             .join("");
+          const isHighlight = achievement && game.hitCount === maxHits;
+          const rowStyle = isHighlight
+            ? `${achievement.highlight}border-radius:12px;padding:12px;`
+            : "padding:12px 0;border-bottom:1px solid #e5e7eb;";
+          const rowEmphasis = isHighlight ? achievement.emphasis : "";
           return `
             <tr>
-              <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
+              <td style="${rowStyle}">
                 <div style="margin-bottom:6px;">${numberBadges}</div>
-                <strong style="color:#111827;">${hits.length} acertos</strong>
+                <strong style="color:#111827;${rowEmphasis}">${
+                  hits.length
+                } acertos</strong>
                 <span style="margin-left:8px;color:#6b7280;">${hitLabel}</span>
               </td>
             </tr>
@@ -468,6 +538,14 @@ function buildResultsEmailHtml({ bolao, draw, games }) {
             draw.number
           )}</strong> já está disponível.
         </p>
+        ${
+          achievement
+            ? `<div style="margin:16px 0;padding:14px 16px;border-radius:12px;${achievement.highlight}">
+                <strong style="color:#111827;${achievement.emphasis}">${achievement.emoji} ${achievement.title}</strong>
+                <div style="color:#4b5563;font-size:13px;margin-top:4px;">Seu melhor jogo teve ${maxHits} acertos.</div>
+              </div>`
+            : ""
+        }
         <div style="background:#eff6ff;border-radius:12px;padding:16px;margin:16px 0;">
           <div style="font-size:14px;color:#1e3a8a;margin-bottom:6px;">Dezenas sorteadas</div>
           <div>
@@ -507,22 +585,30 @@ function buildResultsEmailHtml({ bolao, draw, games }) {
   `;
 }
 
-function buildResultsEmailText({ bolao, draw, games }) {
+function buildResultsEmailText({ bolao, draw, gamesStats, maxHits }) {
   const bolaoTitle = getBolaoDisplayName(bolao);
   const bolaoSubtitle = bolaoTitle === `Bolão ${bolao.id}` ? "" : bolao.id;
   const drawNumbers = draw.numbers.join(" ");
-  const gamesText = games.length
-    ? games
+  const achievement = getHitAchievement(maxHits);
+  const sortedGames = sortGameStats(gamesStats, true);
+  const gamesText = sortedGames.length
+    ? sortedGames
         .map((game) => {
-          const numbers = JSON.parse(game.numbers);
-          const hits = numbers.filter((num) => draw.numbers.includes(num));
-          return `- ${numbers.join(" ")} (${hits.length} acertos)`;
+          const hits = game.numbers.filter((num) => draw.numbers.includes(num));
+          const highlightPrefix =
+            achievement && game.hitCount === maxHits ? "⭐ " : "";
+          return `${highlightPrefix}- ${game.numbers.join(" ")} (${
+            hits.length
+          } acertos)`;
         })
         .join("\n")
     : "- Nenhum jogo cadastrado.";
+  const achievementText = achievement
+    ? `\n${achievement.emoji} ${achievement.title} Seu melhor jogo teve ${maxHits} acertos.\n`
+    : "\n";
   return `Resultados do seu bolão ${bolaoTitle}${
     bolaoSubtitle ? ` (ID ${bolaoSubtitle})` : ""
-  }\nConcurso ${draw.number} (${draw.drawDate})\nDezenas: ${drawNumbers}\n\nJogos:\n${gamesText}`;
+  }\nConcurso ${draw.number} (${draw.drawDate})\nDezenas: ${drawNumbers}${achievementText}\nJogos:\n${gamesText}`;
 }
 
 function buildSubscriptionEmail({ bolao, token }) {
@@ -687,8 +773,21 @@ async function notifySubscribersForDraw(draw) {
         "SELECT id, numbers FROM games WHERE bolao_id = ? ORDER BY id DESC",
         [bolao.id]
       );
-      const emailHtml = buildResultsEmailHtml({ bolao, draw, games });
-      const emailText = buildResultsEmailText({ bolao, draw, games });
+      const drawNumbersSet = new Set(draw.numbers);
+      const gamesStats = getGameStats(games, drawNumbersSet);
+      const maxHits = getMaxHits(gamesStats);
+      const emailHtml = buildResultsEmailHtml({
+        bolao,
+        draw,
+        gamesStats,
+        maxHits,
+      });
+      const emailText = buildResultsEmailText({
+        bolao,
+        draw,
+        gamesStats,
+        maxHits,
+      });
 
       for (const subscriber of subscribers) {
         try {
@@ -696,7 +795,7 @@ async function notifySubscribersForDraw(draw) {
           await mailTransport.sendMail({
             from: `"${bolaoTitle}" <bolao-${bolao.id}@${FROM_DOMAIN}>`,
             to: subscriber.email,
-            subject: `Resultados do seu ${bolaoTitle}`,
+            subject: `${bolaoTitle} ${maxHits} acertos`,
             text: emailText,
             html: emailHtml,
           });
@@ -904,12 +1003,13 @@ app.get("/b/:id", async (req, res) => {
             ? `<span class="badge bg-success">Concurso ${draw.number} (${draw.drawDate})</span>`
             : `<span class="badge bg-warning text-dark">Aguardando concurso ${bolao.draw_number}</span>`;
 
-          const gamesHtml = games.length
-            ? games
+          const gameStats = getGameStats(games, drawNumbers);
+          const sortedGames = sortGameStats(gameStats, Boolean(drawNumbers));
+          const gamesHtml = sortedGames.length
+            ? sortedGames
                 .map((game) => {
-                  const numbers = JSON.parse(game.numbers);
                   const hits = drawNumbers
-                    ? numbers.filter((num) => drawNumbers.has(num))
+                    ? game.numbers.filter((num) => drawNumbers.has(num))
                     : [];
                   const hitCount = hits.length;
                   const hitBadge = drawNumbers
@@ -922,7 +1022,7 @@ app.get("/b/:id", async (req, res) => {
                       } ms-2">${hitCount} acertos</span>`
                     : `<span class="badge bg-secondary ms-2">--</span>`;
 
-                  const list = numbers
+                  const list = game.numbers
                     .map((num) => {
                       const active = drawNumbers && drawNumbers.has(num);
                       return `<span class="badge rounded-pill ${
@@ -1320,7 +1420,7 @@ app.post("/b/:id/games", (req, res) => {
 
 app.get("/admin", requireAdmin, (req, res) => {
   db.all(
-    "SELECT number, draw_date, updated_at FROM draws ORDER BY number DESC",
+    "SELECT number, numbers, draw_date, updated_at FROM draws ORDER BY number DESC",
     (errDraws, draws) => {
       if (errDraws) {
         return res
@@ -1353,8 +1453,28 @@ app.get("/admin", requireAdmin, (req, res) => {
               errSummary
             );
           }
+          let games = [];
+          try {
+            games = await dbAll("SELECT bolao_id, numbers FROM games");
+          } catch (errGames) {
+            console.error("Falha ao carregar jogos para o admin:", errGames);
+            return res
+              .status(500)
+              .send(renderLayout("Admin", "Falha ao carregar jogos."));
+          }
+          const gamesByBolao = games.reduce((acc, game) => {
+            if (!acc[game.bolao_id]) {
+              acc[game.bolao_id] = [];
+            }
+            acc[game.bolao_id].push(JSON.parse(game.numbers));
+            return acc;
+          }, {});
+          const drawsByNumber = draws.reduce((acc, draw) => {
+            acc[draw.number] = JSON.parse(draw.numbers);
+            return acc;
+          }, {});
           const list = boloes.length
-              ? boloes
+            ? boloes
                 .map((bolao) => {
                   const shareLink = `${SHARE_BASE_URL}/b/${encodeURIComponent(
                     bolao.id
@@ -1362,6 +1482,35 @@ app.get("/admin", requireAdmin, (req, res) => {
                   const title = getBolaoDisplayName(bolao);
                   const subtitle =
                     title === `Bolão ${bolao.id}` ? "" : `ID ${bolao.id}`;
+                  const bolaoGames = gamesByBolao[bolao.id] || [];
+                  const gameCounts = bolaoGames.reduce((acc, numbers) => {
+                    const key = numbers.length;
+                    acc[key] = (acc[key] || 0) + 1;
+                    return acc;
+                  }, {});
+                  const gameCountLabel = Object.keys(gameCounts).length
+                    ? Object.keys(gameCounts)
+                        .map(Number)
+                        .sort((a, b) => b - a)
+                        .map((size) => `${gameCounts[size]}x ${size}`)
+                        .join(" • ")
+                    : "Nenhum jogo cadastrado";
+                  const drawNumbers = drawsByNumber[bolao.draw_number];
+                  const maxHits = drawNumbers
+                    ? bolaoGames.reduce((max, numbers) => {
+                        const hitCount = numbers.filter((num) =>
+                          drawNumbers.includes(num)
+                        ).length;
+                        return Math.max(max, hitCount);
+                      }, 0)
+                    : null;
+                  const achievement = maxHits ? getHitAchievement(maxHits) : null;
+                  const maxHitsLabel =
+                    drawNumbers && maxHits !== null
+                      ? `Maior acerto: ${maxHits}${
+                          achievement ? ` (${achievement.label})` : ""
+                        }`
+                      : "";
                   return `<li class="list-group-item d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
                     <div>
                       <strong>${escapeHtml(title)}</strong><br />
@@ -1375,6 +1524,16 @@ app.get("/admin", requireAdmin, (req, res) => {
                       <small class="text-muted">Concurso ${escapeHtml(
                         bolao.draw_number
                       )}</small><br />
+                      <small class="text-muted">${escapeHtml(
+                        gameCountLabel
+                      )}</small>
+                      ${
+                        maxHitsLabel
+                          ? `<br /><small class="text-muted">${escapeHtml(
+                              maxHitsLabel
+                            )}</small>`
+                          : ""
+                      }
                       <small class="text-muted text-break d-block">
                         Link: <a href="${escapeHtml(shareLink)}">${escapeHtml(
                           shareLink
