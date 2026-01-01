@@ -1002,6 +1002,39 @@ app.get("/b/:id", async (req, res) => {
           const resultBadge = draw
             ? `<span class="badge bg-success">Concurso ${draw.number} (${draw.drawDate})</span>`
             : `<span class="badge bg-warning text-dark">Aguardando concurso ${bolao.draw_number}</span>`;
+          const drawResultCard = draw
+            ? `
+                <div class="card shadow-sm mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Resultado do concurso ${escapeHtml(
+                      draw.number
+                    )}</h2>
+                    <div class="mb-2 text-muted small">Apuração em ${escapeHtml(
+                      draw.drawDate
+                    )}</div>
+                    <div>
+                      ${draw.numbers
+                        .map(
+                          (num) =>
+                            `<span class="badge rounded-pill bg-primary me-1 mb-1">${escapeHtml(
+                              num
+                            )}</span>`
+                        )
+                        .join("")}
+                    </div>
+                  </div>
+                </div>
+              `
+            : `
+                <div class="card border-0 bg-light mb-4">
+                  <div class="card-body">
+                    <h2 class="h6">Resultado do concurso ${escapeHtml(
+                      bolao.draw_number
+                    )}</h2>
+                    <p class="text-muted mb-0">O resultado ainda não foi divulgado.</p>
+                  </div>
+                </div>
+              `;
 
           const gameStats = getGameStats(games, drawNumbers);
           const sortedGames = sortGameStats(gameStats, Boolean(drawNumbers));
@@ -1219,6 +1252,7 @@ app.get("/b/:id", async (req, res) => {
                 ${subscribersCard}
               </div>
               <div class="col-lg-8">
+                ${drawResultCard}
                 <div class="card shadow-sm">
                   <div class="card-body">
                     <h2 class="h6">Jogos cadastrados</h2>
