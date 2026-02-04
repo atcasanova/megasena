@@ -342,6 +342,11 @@ function renderLayout(title, body, extraHead = "") {
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
       <div class="container">
         <a class="navbar-brand" href="/">Bolão Mega-Sena</a>
+        <div class="d-flex flex-wrap gap-3">
+          <a class="nav-link text-white" href="/">Início</a>
+          <a class="nav-link text-white" href="/privacidade">Privacidade</a>
+          <a class="nav-link text-white" href="/contato">Contato</a>
+        </div>
       </div>
     </nav>
     <main class="container">${body}</main>
@@ -834,6 +839,21 @@ app.get("/", async (req, res) => {
     console.error("Falha ao carregar próximo concurso:", err);
   }
   const body = `
+    <section class="card shadow-sm mb-4">
+      <div class="card-body">
+        <h1 class="h4 page-title">Acompanhamento de bolões da Mega-Sena com notificação de resultados</h1>
+        <p class="muted-lead">Este site tem como objetivo facilitar o acompanhamento de bolões da Mega-Sena, a loteria oficial administrada pela Caixa Econômica Federal, permitindo que grupos de usuários organizem e registrem jogos já realizados de forma simples e centralizada.</p>
+        <p class="muted-lead">A plataforma não realiza apostas, não intermedeia jogos e não possui qualquer vínculo com a Caixa Econômica Federal ou com casas de apostas. Todos os números cadastrados pelos usuários correspondem a apostas previamente efetuadas pelos próprios participantes, fora do escopo deste site.</p>
+        <p class="muted-lead">Após o cadastro dos jogos, o sistema acompanha automaticamente a divulgação dos resultados oficiais da Mega-Sena publicados no site da Caixa. Quando um novo resultado é disponibilizado, os usuários associados a um determinado bolão recebem notificações por e-mail, informando o desempenho dos jogos cadastrados.</p>
+        <p class="muted-lead">O serviço tem caráter informativo e organizacional, sendo especialmente útil para grupos de amigos, familiares ou colegas que desejam centralizar seus jogos, evitar esquecimentos e acompanhar os resultados de forma prática, sem a necessidade de consultas manuais frequentes.</p>
+        <p class="muted-lead">Este é um projeto independente, desenvolvido com fins recreativos e informativos. O site não garante prêmios, não valida apostas e não substitui os canais oficiais da Caixa Econômica Federal, que permanecem como a única fonte oficial de resultados e premiações da Mega-Sena.</p>
+        <div class="alert alert-warning mt-4 mb-0">
+          <strong>🔞 Observação importante</strong><br />
+          ⚠️ Conteúdo destinado a maiores de 18 anos.<br />
+          Este site não realiza apostas nem intermedia jogos de loteria. Use de forma consciente.
+        </div>
+      </div>
+    </section>
     <div class="row">
       <div class="col-lg-8">
         <div class="card shadow-sm">
@@ -878,6 +898,49 @@ app.get("/", async (req, res) => {
     </div>
   `;
   res.send(renderLayout("Bolão Mega-Sena", body));
+});
+
+app.get("/privacidade", (req, res) => {
+  const body = `
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h1 class="h4 page-title">🔐 Política de Privacidade</h1>
+        <p class="muted-lead">O site bolao.bru.to respeita a privacidade de seus usuários e está comprometido com a proteção das informações coletadas.</p>
+
+        <h2 class="h6 mt-4">Coleta de dados</h2>
+        <p class="muted-lead">Podem ser coletadas informações de forma automática, como endereço IP, tipo de navegador, páginas acessadas e tempo de permanência, com o objetivo de análise estatística e melhoria da experiência do usuário.</p>
+
+        <h2 class="h6 mt-4">Cookies e publicidade</h2>
+        <p class="muted-lead">O site pode utilizar cookies próprios e de terceiros, incluindo serviços de publicidade como o Google AdSense, que podem exibir anúncios personalizados com base nas visitas do usuário a este e a outros sites.</p>
+        <p class="muted-lead">O usuário pode gerenciar ou desativar a personalização de anúncios nas configurações de sua conta Google.</p>
+
+        <h2 class="h6 mt-4">Compartilhamento de informações</h2>
+        <p class="muted-lead">As informações coletadas não são vendidas nem compartilhadas com terceiros, exceto quando exigido por lei.</p>
+
+        <h2 class="h6 mt-4">Conteúdo sensível</h2>
+        <p class="muted-lead">O site não incentiva apostas financeiras e recomenda o uso responsável da plataforma.</p>
+
+        <h2 class="h6 mt-4">Contato</h2>
+        <p class="muted-lead">Dúvidas relacionadas a esta Política de Privacidade podem ser enviadas para:</p>
+        <p class="muted-lead mb-0">📧 eu@atcasanova.me</p>
+      </div>
+    </div>
+  `;
+  res.send(renderLayout("Política de Privacidade", body));
+});
+
+app.get("/contato", (req, res) => {
+  const body = `
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h1 class="h4 page-title">Contato</h1>
+        <p class="muted-lead">O bolao.bru.to é um projeto independente, com finalidade recreativa e informativa.</p>
+        <p class="muted-lead">Para dúvidas, sugestões, correções ou questões relacionadas ao uso da plataforma, entre em contato pelo e-mail:</p>
+        <p class="muted-lead mb-0">📧 eu@atcasanova.me</p>
+      </div>
+    </div>
+  `;
+  res.send(renderLayout("Contato", body));
 });
 
 app.post("/bolao", async (req, res) => {
